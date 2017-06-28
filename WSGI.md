@@ -169,3 +169,82 @@ def run_with_cgi(application):
         if hasattr(result, 'close'):
             result.close()
 ```
+
+middleware
+---
+
+一个对象可以对于一些应用扮演服务器的角色，也可以对一些服务器扮演应用的角色。这样的middleware可以完成下面的功能：
+
+- 在重写environ后，根据目标URL将一个请求分发到不同的应用对象
+- 允许多个应用程序或框架同时在同一个进程中一起运行
+- 在网络上转发请求和响应，进行负载均衡和远程处理
+- 在内容上进行后加工，比如应用XSL样式
+
+middleware的存在对于接口两端的服务器和应用都是透明的，应该不需要特别的支持。用户希望在应用中组合使用middleware只需要简单的向服务器提供middleware组件，就好像它是一个应用，然后配置middleware组件去调用应用，也就好像middleware是一个服务器。当然，这个middleware包装的应用也可能是另外一个包装了应用的中间件，以此类推，创建了一个中间件栈。
+
+最重要的部分，中间件必须遵从WSGI两端服务器和应用的限制和需求。在一些情况，中间件的需求可能更严格相比较纯服务器和应用，这些要点将在说明中进一步阐述。
+
+下面是一个中间件的例子，它将`text/plain`响应转换成pig Latin。一个真正的中间件可能会使用更鲁棒的方式检查Content-type，并且也应该检查内容编码。并且，这个简单的例子忽略了一个单词可能被一些边界元素分割。
+
+```
+from piglatin import piglatin
+class LatinIter:
+    '''转换一个可迭代输出到piglatin。另外因为第一次迭代会跳到非空的输出上，所以使用可变的bool标志来判断'''
+    def __init__(self, result, transform_ok):
+        # 可迭代对象是否有close属性
+        if hasattr(result, 'close'):
+            self.close = result.close
+        # 获取可迭代对象的__next__方法
+        self._next = iter(result).__next__
+        # 迭代的变化标志
+        self.transform_ok = transform_ok
+    def __iter__(self):
+        return self
+    def __next__(self):
+        if self.transform_ok:
+            # 在此进行转换，只有当有数据的情况下
+            return piglatin(self._next())   # call must be byte-safe on Py3
+        else:
+            return self._next
+
+class Latinator:
+
+    # by default, don't transform output
+    transform = False
+    # 中间件，接受一个应用对象
+    def __init__(self, application):
+        self.application = application
+    # 中间件的实例对于服务器来说相当于一个应用对象
+    # 对于应用，相当于一个服务器对象
+    def __call__(self, environ, start_response):
+        transform_ok = []
+        # start_latin将会传入应用对象里（这里就相当于服务器)，包装了start_response
+        # start_latin只是来处理headers的，并且包装write函数来发送body数据，然后headers的每一项
+        # 转换成Latin是使用LatinIter来包装的
+        def start_latin(status, response_headers, exc_info=None):
+            # Reset ok flag, in case this is a repeat call
+            del transform_ok[:]
+            for name, value in response_headers:
+                # 找到content-type然后将所有headers加入，没找到就结束了，不改变headers
+                if name.lower() == 'content-type' and value == 'text/plain':
+                    transform_ok.append(True)
+                    # 因为要改变header对象的数据，所以长度项要去除，否则会报错
+                    response_headers = [(name, value)
+                        for name, value in response_headers
+                            if name.lower() != 'content-length'
+                    ]
+                break
+            # 包装在中间件内部的start_response，所以start_response返回的write函数，可以让中间件进行包装
+            write = start_response(status, response_headers, exc_info)
+            if transform_ok:
+                def write_latin(data):
+                    write(piglatin(data))   # call must be byte-safe on Py3
+                return write_latin
+            else:
+                return write
+        # 返回一个被中间件包装的可迭代对象，都是body数据，headers已经在start_latin设置好了
+        return LatinIter(self.application(environ, start_latin), transform_ok)
+# Run foo_app under a Latinator's control, using the example CGI gateway
+from foo_app import foo_app
+run_with_cgi(Latinator(foo_app))
+```
