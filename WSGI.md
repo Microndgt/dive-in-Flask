@@ -248,3 +248,35 @@ class Latinator:
 from foo_app import foo_app
 run_with_cgi(Latinator(foo_app))
 ```
+
+细节问题
+===
+
+应用对象必须接受两个位置参数。为了说明，我们将其命名为environ和start_response，但是它们也可以取其他名字。一个服务器或者网关必须使用位置参数来调用应用对象，比如`result = application(environ, start_response)`
+
+environ是一个字典对象，包含了CGI风格的环境变量。这个对象必须是一个Python内置的字典，并且允许应用在任何时候去修改这个字典。字典必须包含WSGI需要的变量，也可以包含特定的服务器扩展的变量，根据以下会说明的约定去命名。
+
+start_response参数是一个可调用对象接受两个位置参数，一个可选参数。为了说明，我们命名这些参数分别为status,response_headers,exc_info，它们同样也可以取其他名字，应用必须使用位置参数来调用start_response这个可调用对象。`start_response(status, response_headers)`
+
+status参数是一个状态字符串，格式为`999 message`这种形式，response_headers是一个列表元组，元组格式为`(header_name, header_value)`，主要是来描述HTTP的响应头。可选的exc_info参数将在下面的`The start_response() Callable`和`Error Handling`详细描述。只有当应用陷入错误并且尝试在浏览器显示一个错误信息时候用到。
+
+start_response可调用对象必须返回一个`write(body_data)`接受一个位置参数的对象：一个将作为HTTP响应体一部分的bytestring写入。提供write对象主要是支持现有特定的框架一些必须的输出API。如果可以避免，应该避免被新的应用或者框架使用。
+
+当被服务器调用，应用对象必须返回一个可迭代的产生零或者更多的bytestring。这可以通过很多方法实现，比如返回一个bytestring的列表，或者应用是一个生成器函数来生成bytestring，或者应用是一个类，其实例是可迭代的。不管怎么实现，应用对象必须返回一个可迭代的产生0或者更多的bytestring。
+
+服务器或者网关必须以非缓存的形式将产生的bytestring传输到客户端(write函数),在另一个请求开始前，完成每个bytestring的传输。换句话说，应用必须实现自己的缓存，而不是依赖服务器。
+
+服务器或者网关应该对待产生的bytestring为二进制字节的序列，特别的，应该保证行尾没有被改变。应用必须确保要写入的bytestring应该是以一种对客户端合适的格式。服务器或者网关可能应用HTTP传输编码，或者应用其他的传输来应用HTTP特性比如byte-range传输。
+
+如果成功调用了`len(iterable)`，服务器可以依赖这个正确的结果。也就是说，如果应用返回的可迭代结果提供了一个`__len__()`方法，就必须返回一个正确的结果。
+
+如果应用返回的可迭代对象有一个`close()`方法，服务器或者网关必须在当前请求结束完成调用这个方法，不管请求是正常完成还是因为在迭代结果或者浏览器提前断开连接时发生的应用错误提前中止了。`close()`方法需求是应用用来释放资源的。
+
+应用返回的生成器或者其他自定义的迭代器不能假定所有的迭代器都被完全消费，可能被服务器提前关闭。
+
+应用必须在可迭代对象生成第一个bytestring前调用start_response，这样服务器就可以在发送响应体内容前发送响应头。然而，这个调用可能会被迭代器的第一次迭代完成，所以服务器不能假定start_response在开始迭代迭代器前已经被调用。因此write函数前面才会有headers_sent的判断。
+
+最后，服务器或者网关不能直接使用应用返回的迭代器的任何属性，除非是指定给服务器或者网关的类型的实例，比如`wsgi.file_wrapper`返回的file wrapper。一般来讲，只有指定的属性或者是迭代API允许的属性可以被接受。
+
+environ 变量
+---

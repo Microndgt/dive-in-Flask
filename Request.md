@@ -172,3 +172,57 @@ class Request(BaseRequest, AcceptMixin, ETagRequestMixin,
 
 ```
 class BaseRequest(object):
+    '''非常基础的request对象，没有实现一些高级的用法比如实体标签解析或者缓存控制。request对象通过将WSGI环境作为第一个参数传入创建，并且会将自己加入到WSGI环境中，名字是werkzeug.request,除非创建request时候populate_request设置为False
+    同时也有一些可用的mixins来添加额外的功能，比如继承于BaseRequest的Request就有很多重要的mixins
+
+    创建一个自己的子类并且添加缺失的功能，通过mixins或者直接的实现
+
+    from werkzeug.wrappers import BaseRequest, ETagRequestMixin
+
+    class Request(BaseRequest, ETagRequestMixin):
+        pass
+
+    Request对象是只读的，与低级解析函数不同，request对象将会使用不可变对象。
+
+    request对象将默认假定所有的text数据是utf-8编码的。
+
+    默认request对象将会被加入到WSGI环境中-werkzeug.request去支持测试系统，如果不需要这样，设置populate_request为False
+
+    如果shallow是True的话，环境就会被初始化为shallow对象，每个操作如果修改environ，就会产生异常除非shallow显式的设置为False。这个对中间件很有用，如果你不想无意间消费了表单数据。shallow请求在WSGI对象中并不是很流行
+    '''
+    charset = 'utf-8'
+    encoding_errors = 'replace'
+    # 这个将会被转送到表单数据解析函数里,parse_form_data
+    max_content_length = None
+    # 最大的表单字段长度
+    max_form_memory_size = None
+    # 这个类是给args和form使用的，默认是这个不可变的字典支持一个key多个value，可选的可以使用ImmutableOrderedMultiDict，或者ImmutableDict更快但是只会记录最会一个key，不建议使用可变字典，以下的数据结构都将在werkzeug节解析
+    parameter_storage_class = ImmutableMultiDict
+    list_storage_class = ImmutableList
+    dict_storage_class = ImmutableTypeConversionDict
+    # 一个表单数据解析器
+    form_data_parser_class = FormDataParser
+    # 在这个请求中信任的主机列表，默认所有的主机都会被信任，意味着不论什么客户端发送数据，主机都会接受，推荐的做法是一个web服务器应该手动的设置唯一正确的主机，移除X-Forwarded-Host头信息如果没有使用的话
+    trusted_hosts = None
+    # 指示数据描述符是否应该被允许读取和缓存输入流，默认是不允许的
+    disable_data_descriptor = False
+    def __init__(self, environ, populate_request=True, shallow=False):
+        self.environ = environ
+        if populate_request and not shallow:
+            self.environ['werkzeug.request'] = self
+        self.shallow = shallow
+    def __repr__(self):
+        '''确保该方法能正常工作，即使request对象是使用非法WSGI环境创建的'''
+        try:
+            args.append("'%s'" % to_native(self.url, self.url_charset))
+            args.append('[%s]' % self.method)
+        except Exception:
+            args.append('(invalid WSGI environ)')
+        return '<%s %s>' % (
+                self.__class__.__name__,
+                ' '.join(args)
+            )
+    @property
+    def url_charset(self):
+        return self.charset
+```
