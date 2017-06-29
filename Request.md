@@ -225,4 +225,85 @@ class BaseRequest(object):
     @property
     def url_charset(self):
         return self.charset
+    @classmethod
+    def from_values(cls, *args, **kwargs):
+        '''基于给的值来创建一个新的请求对象'''
+        from werkzeug.test import EnvironBuilder
+        # 这块这么写貌似不太友好。。直接设置kwargs['charset'] = cls.charset就可以么
+        charset = kwargs.pop('charset', cls.charset)
+        kwargs['charset'] = charset
+        builder = EnvironBuilder(*args, **kwargs)
+        try:
+            return builder.get_request(cls)
+        finally:
+            builder.close()
+    @classmethod
+    def application(cls, f):
+        '''装饰了一个作为响应器的函数，接受一个request作为一个参数，就像responder一样工作，但是函数传递一个request对象作为第一个参数并且请求对象可以被自动关闭。
+        @Request.application
+        def my_wsgi_app(request):
+            return Response("hello world")
+        这个函数应该是request参数指的就是每次请求的参数吧，包含environ，start_response,request
+        '''
+        def application(*args):
+            # 使用Request类传入environ实例一个request对象
+            request = cls(args[-2])
+            with request:
+                return f(*args[:-2] + (request,))(*args[-2:])
+        # 返回了已经更新函数信息的application函数
+        return update_wrapper(application, f)
+    def _get_file_stream(self, total_content_length, content_type, filename=None, content_length=None):
+        '''调用去获取上传文件流
+        必须提供一个文件对象类，有read(), readline(),seek()方法，并且是可读可写的
+        如果总长度大于500k那么默认实现会返回一个临时文件，因为多数浏览器不提供文件的内容长度，所以只有总长度起作用。mimetype资源媒体类型
+        '''
+        # 下面这个将在werkzeug中的FormDataParser解析到
+        return default_stream_factory(total_content_length, content_type,
+                                      filename, content_length)
+    @property
+    def want_form_data_parsed(self):
+        '''如果请求方法包含内容，则返回True，目前是有content_type则返回True'''
+        return bool(self.environ.get('CONTENT_TYPE'))
+    def make_form_data_parser(self):
+        '''这个函数创建了一个表单数据解析器，form_data_parser_class其实是FormDataParser'''
+        return self.form_data_parser_class(self._get_file_stream,
+                                       self.charset,
+                                       self.encoding_errors,
+                                       self.max_form_memory_size,
+                                       self.max_content_length,
+                                       self.parameter_storage_class)
+    def _load_form_data(self):
+        '''内部使用这个方法来获取提交的数据。在调用这个函数之后，将会在request对象上的dict设置form和files这两个key，内容就是提交的数据。事实上，输入流在之后将会为空，可以调用这个方法强制去解析表单数据'''
+        if 'form' in self.__dict__:
+            return
+        _assert_not_shallow(self)
+        # 如果有数据内容的话
+        if self.want_form_data_parsed:
+            content_type = self.environ.get('CONTENT_TYPE', '')
+            # 这个函数是werkzeug.wsgi中实现的
+            content_length = get_content_length(self.environ)
+            mimetype, options = parse_options_header(content_type)
+            parser = self.make_form_data_parser()
+            data = parser.parse(self._get_stream_for_parsing(), mimetype, content_length, options)
+        else:
+            # 默认数据都是ImmutableMultiDict
+            data = (self.stream, self.parameter_storage_class(),
+                    self.parameter_storage_class())
+        d = self.__dict__
+        d['stream'], d['form'], d['files'] = data
+    def _get_stream_for_parsing(self):
+        cached_data = getattr(self, '_cached_data', None)
+        if cached_data is not None:
+            return BytesIO(cached_data)
+        return self.stream
+    def close(self):
+        '''关闭request对象的相关资源，显式的关闭所有的文件句柄'''
+        # ImmutableMultiDict对象
+        files = self.__dict__.get('files')
+        for key, value in iter_multi_items(files or ()):
+            value.close()
+    def __enter__(self):
+        return self
+    def __exit__(self, exc_type, exc_value, tb):
+        self.close()
 ```
