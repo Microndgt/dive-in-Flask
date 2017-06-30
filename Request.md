@@ -1,6 +1,15 @@
+- [request上下文对象](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md#request上下文对象)
+- [Flask - Request](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md#Flask - Request)
+- [Werkzeug - Request](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md#Werkzeug - Request)
+- [Werkzeug - BaseRequest](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md#Werkzeug - BaseRequest)
+- [Flask 处理请求的过程](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md#Flask 处理请求的过程)
+
 对于 WSGI server 来说，请求又变成了文件流(套接字)，它要读取其中的内容，把 HTTP 请求包含的各种信息保存到一个字典中，调用 WSGI app； 对于 flask app 来说，请求就是一个对象，当需要某些信息的时候，只需要读取该对象的属性或者方法就行了。
 
-`from flask import request`点击request后可以看到，
+`from flask import request`点击request后可以看到
+
+request上下文对象
+---
 
 ```
 request = LocalProxy(partial(_lookup_req_object, 'request'))
@@ -21,6 +30,9 @@ if request is None:
   request = app.request_class(environ)
 self.request = request
 ```
+
+Flask - Request
+---
 
 可以看到request是定义在app中的一个属性，传入了environ参数所创建的，转入Flask类，可以看到一个类属性`request_class = Request`，因此请求上下文对象中的request属性是Request类的一个实例，继续向上溯源，可以得到Request类的源码：
 
@@ -150,6 +162,9 @@ def attach_enctype_error_multidict(request):
     request.files.__class__ = newcls
 ```
 
+Werkzeug - Request
+---
+
 这是Flask中对于Request进行的扩展，但是究竟从environ如何创建出一个Request对象呢，那么就必须继续向上探索，这将到werkzeug了，点击RequestBase，进入到了werkzeug/wrappers.py中的Request类
 
 ```
@@ -167,6 +182,9 @@ class Request(BaseRequest, AcceptMixin, ETagRequestMixin,
 可以看到这个类是由许多mixin来组成的，mixin用来来扩展其他类的功能,这些类单独使用起来没有任何意义，事实上如果你去实例化任何一个类，除了产生异常外没任何作用。 它们是用来通过多继承来和其他对象混入使用的,用途同样是增强已存在的类的功能和一些可选特征。
 
 对于混入类，有几点需要记住。首先是，混入类不能直接被实例化使用。 其次，混入类没有自己的状态信息，也就是说它们并没有定义 `__init__()` 方法，并且没有实例属性。
+
+Werkzeug - BaseRequest
+---
 
 首先研究BaseRequest这个类：
 
@@ -306,4 +324,302 @@ class BaseRequest(object):
         return self
     def __exit__(self, exc_type, exc_value, tb):
         self.close()
+    @cached_property
+    def stream(self):
+        '''读取传入的数据的流，这个流被合适的保护着，你不能意外的去读取过去输入的长度。werkzeug内部会经常使用这个数据流读取数据。
+        '''
+        assert_not_shallow(self)
+        return get_input_stream(self.environ)
+    input_stream = environ_property('wsgi.input', """
+    The WSGI input stream.
+
+    In general it's a bad idea to use this one because you can easily read past
+    the boundary.  Use the :attr:`stream` instead.
+    """)
+    @cached_property
+    def args(self):
+        '''解析的url参数，默认是一个ImmutableMultiDict'''
+        return url_decode(wsgi_get_bytes(self.environ.get('QUERY_STRING', '')),
+                          self.url_charset, errors=self.encoding_errors,
+                          cls=self.parameter_storage_class)
+    @cached_property
+    def data(self):
+        if self.disable_data_descriptor:
+            raise AttributeError('data descriptor is disabled')
+        # 在第一次的时候触发表单数据解析意味着描述符将不会cache表单或者文件数据。
+        return self.get_data(parse_form_data=True)
+    def get_data(self, cache=True, as_text=False, parse_form_data=False):
+        '''从客户端读取缓存的数据至bytestring。通常会被缓存下来。在没有检查数据长度的情况下不应该直接调用这个方法，因为可能会有大量的数据，导致服务器的存储问题。
+        如果表单数据已经被解析过了，这个函数将不会返回任何数据如果没有缓存的话。隐式调用表单数据解析函数，设置parse_form_data为True。
+        rv = getattr(self, '_cached_data', None)
+        if rv is None:
+            if parse_form_data:
+                self._load_form_data()
+            rv = self.stream.read()
+            if cache:
+                self._cached_data = rv
+        if as_text:
+            rv = rv.decode(self.charset, self.encoding_errors)
+        return rv
+    @cached_property
+    def form(self):
+        self._load_form_data()
+        return self.form
+    @cached_property
+    def values(self):
+        """Combined multi dict for :attr:`args` and :attr:`form`."""
+        args = []
+        for d in self.args, self.form:
+            if not isinstance(d, MultiDict):
+                d = MultiDict(d)
+            args.append(d)
+        return CombinedMultiDict(args)
+    @cached_property
+    def files(self):
+        '''一个multidict对象，包含了所有的上传文件。每个files是一个FileStorage对象'''
+        self._load_form_data()
+        return self.files
+    @cached_property
+    def headers(self):
+        '''WSGI环境形成的headers，不可变'''
+        return EnvironHeaders(self.environ)
+    @cached_property
+    def cookies(self):
+        """Read only access to the retrieved cookie values as dictionary."""
+        return parse_cookie(self.environ, self.charset,
+                            self.encoding_errors,
+                            cls=self.dict_storage_class)
+    @cached_property
+    def path(self):
+        '''请求的路径'''
+        raw_path = wsgi_decoding_dance(self.environ.get('PATH_INFO') or '',
+                                       self.charset, self.encoding_errors)
+        return '/' + raw_path.lstrip('/')
+    @cached_property
+    def full_path(self):
+        """请求路径，包含查询字符串"""
+        return self.path + u'?' + to_unicode(self.query_string, self.url_charset)
+    @cached_property
+    def script_root(self):
+        """没有尾斜线的脚本根路径"""
+        raw_path = wsgi_decoding_dance(self.environ.get('SCRIPT_NAME') or '',
+                                       self.charset, self.encoding_errors)
+        return raw_path.rstrip('/')
+    @cached_property
+    def url(self):
+        return get_current_url(self.environ,
+                           trusted_hosts=self.trusted_hosts)
+    @cached_property
+    def base_url(self):
+        return get_current_url(self.environ, strip_querystring=True,
+                           trusted_hosts=self.trusted_hosts)
+    @cached_property
+    def url_root(self):
+        return get_current_url(self.environ, True,
+                           trusted_hosts=self.trusted_hosts)
+    @cached_property
+    def host_url(self):
+        return get_current_url(self.environ, host_only=True,
+                           trusted_hosts=self.trusted_hosts)
+    @cached_property
+    def host(self):
+        return get_host(self.environ, trusted_hosts=self.trusted_hosts)
+    query_string = environ_property(
+        'QUERY_STRING', '', read_only=True,
+        load_func=wsgi_get_bytes, doc='The URL parameters as raw bytestring.')
+    method = environ_property(
+        'REQUEST_METHOD', 'GET', read_only=True,
+        load_func=lambda x: x.upper(),
+        doc="The transmission method. (For example ``'GET'`` or ``'POST'``).")
+    @property
+    def remote_addr(self):
+        """The remote address of the client."""
+        return self.environ.get('REMOTE_ADDR')
+    @cached_property
+    def access_route(self):
+        """If a forwarded header exists this is a list of all ip addresses
+        from the client ip to the last proxy server.
+        """
+        if 'HTTP_X_FORWARDED_FOR' in self.environ:
+            addr = self.environ['HTTP_X_FORWARDED_FOR'].split(',')
+            return self.list_storage_class([x.strip() for x in addr])
+        elif 'REMOTE_ADDR' in self.environ:
+            return self.list_storage_class([self.environ['REMOTE_ADDR']])
+        return self.list_storage_class()
+    remote_user = environ_property('REMOTE_USER', doc='''
+        If the server supports user authentication, and the script is
+        protected, this attribute contains the username the user has
+        authenticated as.''')
+
+    scheme = environ_property('wsgi.url_scheme', doc='''
+        URL scheme (http or https).
+
+        .. versionadded:: 0.7''')
+
+    is_xhr = property(lambda x: x.environ.get('HTTP_X_REQUESTED_WITH', '')
+                      .lower() == 'xmlhttprequest', doc='''
+        True if the request was triggered via a JavaScript XMLHttpRequest.
+        This only works with libraries that support the `X-Requested-With`
+        header and set it to "XMLHttpRequest".  Libraries that do that are
+        prototype, jQuery and Mochikit and probably some more.''')
+    is_secure = property(lambda x: x.environ['wsgi.url_scheme'] == 'https',
+                         doc='`True` if the request is secure.')
+    is_multithread = environ_property('wsgi.multithread', doc='''
+        boolean that is `True` if the application is served by
+        a multithreaded WSGI server.''')
+    is_multiprocess = environ_property('wsgi.multiprocess', doc='''
+        boolean that is `True` if the application is served by
+        a WSGI server that spawns multiple processes.''')
+    is_run_once = environ_property('wsgi.run_once', doc='''
+        boolean that is `True` if the application will be executed only
+        once in a process lifetime.  This is the case for CGI for example,
+        but it's not guaranteed that the execution only happens one time.''')
 ```
+
+这个类相当长，所包含内容也相当多，这里只对基本的内容做了解析，其他的内容暂时没有深入去解析。
+
+Flask 处理请求的过程
+---
+
+既然已经将从werkzeug以及到Flask中的Request类以及请求上下文都解析了一遍，那么下来就应该看看Flask如何处理这些请求的。
+
+```
+def wsgi_app(self, environ, start_response):
+    ctx = self.request_context(environ)
+    ctx.push()
+    error = None
+    try:
+        try:
+            response = self.full_dispatch_request()
+        except Exception as e:
+            error = e
+            response = self.handle_exception(e)
+        return response(environ, start_response)
+    finally:
+        if self.should_ignore_error(error):
+            error = None
+        ctx.auto_pop(error)
+```
+
+回到Flask的`wsgi_app`方法上，可以看到，首先通过传入的environ创建了一个请求上下文对象，然后将自己入栈，在此同时，如果没有应用上下文，也会将应用上下文入栈。结下来就是分发请求到视图函数上进行处理。所以跳到`self.full_dispatch_request`方法上。
+
+```
+def full_dispatch_request(self):
+    '''分发请求，并且在这之前进行请求预处理和后处理并且处理HTTP异常和错误'''
+    self.try_trigger_before_first_request_functions()
+    try:
+        request_started.send(self)
+        rv = self.preprocess_request()
+        if rv is None:
+            rv = self.dispatch_request()
+    except Exception as e:
+        rv = self.handle_user_exception(e)
+    return self.finalize_request(rv)
+```
+
+首先是处理整个app第一个请求，每个app启动时候只处理一次，在应用上就是使用`before_app_first_request`装饰器
+
+```
+def try_trigger_before_first_request_functions(self):
+    '''在每个请求处理之前调用确保触发了before_first_request_funcs，对于每一个应用实例只执行一次'''
+    # 表征是否接受到了第一个请求
+    if self._got_first_request:
+        return
+    with self._before_request_lock:
+        if self._got_first_request:
+            return
+        for func in self.before_first_request_funcs:
+            func()
+        self._got_first_request = True
+```
+
+这里在app处理第一个请求前，`self._got_first_request`为False，因此会执行所有被`before_first_request`装饰器装饰的函数，因为涉及到公用属性的修改，可能app有多个线程来处理请求，因此需要获得锁，这些函数只需要执行一次，执行完毕之后，`self._got_first_request`被置为True
+
+执行完毕之后，`request_started`开始发送信号，表示请求处理开始，这些信号可以在实际开发应用中使用，进行信号订阅，里面包含了许多在Flask应用状态改变的信号：
+
+```
+signals_available = False
+try:
+    from blinker import Namespace
+    signals_available = True
+except ImportError:
+    class Namespace(object):
+        def signal(self, name, doc=None):
+            return _FakeSignal(name, doc)
+    class _FakeSignal(object):
+        """If blinker is unavailable, create a fake class with the same
+        interface that allows sending of signals but will fail with an
+        error on anything else.  Instead of doing anything on send, it
+        will just ignore the arguments and do nothing instead.
+        """
+
+        def __init__(self, name, doc=None):
+            self.name = name
+            self.__doc__ = doc
+        def _fail(self, *args, **kwargs):
+            raise RuntimeError('signalling support is unavailable '
+                               'because the blinker library is '
+                               'not installed.')
+        send = lambda *a, **kw: None
+        connect = disconnect = has_receivers_for = receivers_for = \
+            temporarily_connected_to = connected_to = _fail
+        del _fail
+_signals = Namespace()
+template_rendered = _signals.signal('template-rendered')
+before_render_template = _signals.signal('before-render-template')
+request_started = _signals.signal('request-started')
+request_finished = _signals.signal('request-finished')
+request_tearing_down = _signals.signal('request-tearing-down')
+got_request_exception = _signals.signal('got-request-exception')
+appcontext_tearing_down = _signals.signal('appcontext-tearing-down')
+appcontext_pushed = _signals.signal('appcontext-pushed')
+appcontext_popped = _signals.signal('appcontext-popped')
+message_flashed = _signals.signal('message-flashed')
+```
+
+这里需要从blinker获取支持，导入Namespace，从而创建信号，但是如果导入失败，那么就应该给一个友好的提示，这里就创建了一个Namespace类，使用了一个可以进行传送信号，但是会失败的类。使用Namespace的好处是唯一的信号名，并且将不同的信号源独立起来，这样方便编码和区分调试。关于Flask中信号的使用，见[Flask信号](http://skyrover.me/post/16/)
+
+发送信号之后，调用`rv = self.preprocess_request()`进行请求预处理，这里处理的是`before_request`装饰的函数，也就是在每个请求前进行处理的东西。Flask的钩子函数就是这样的处理机制。
+
+```
+def preprocess_request(self):
+    '''在真实请求分发前调用，会调用before_request装饰的函数，不传递参数。
+    如果其中任何一个函数返回了值，那么就把这个值当成了视图函数的返回，后续的请求处理将会停止。
+    这也会触发url_value_preprocessor函数，在before_request函数之前调用
+    '''
+    bp = _request_ctx_stack.top.request.blueprint
+    funcs = self.url_value_preprocessors.get(None, ())
+    # URL处理器
+    if bp is not None and bp in self.url_value_preprocessors:
+        funcs = chain(funcs, self.url_value_preprocessors[bp])
+    for func in funcs:
+        func(request.endpoint, request.view_args)
+    # 请求前处理，如果有返回值，那么就返回，返回后就不会继续下一步的请求了
+    funcs = self.before_request_funcs.get(None, ())
+    if bp is not None and bp in self.before_request_funcs:
+        funcs = chain(funcs, self.before_request_funcs[bp])
+    for func in funcs:
+        rv = func()
+        if rv is not None:
+            return rv
+```
+
+预处理请求部分主要完成的任务是，url处理器和`before_request`的处理内容。完成预处理请求部分之后，如果没有返回值，那么分发请求到真实的视图函数上。
+
+```
+def dispatch_request(self):
+    '''请求分发，匹配URL并且返回视图函数或者错误处理器的值，不必是一个响应对象。可以调用make_response来将返回值加工成一个响应对象。
+    '''
+    req = _request_ctx_stack.top.request
+    if req.routing_exception is not None:
+        self.raise_routing_exception(req)
+    rule = req.url_rule
+    # 如果自动处理options请求
+    if getattr(rule, 'provide_automatic_options', False) \
+           and req.method == 'OPTIONS':
+        return self.make_default_options_response()
+    # 分发请求到路由函数上
+    return self.view_functions[rule.endpoint](**req.view_args)
+```
+
+获取路由函数的返回值后，就调用`self.finalize_request(rv)`来包装返回值为response对象，自此正常的请求的处理基本完成，至于请求出错，比如404，400等错误处理将单独作为一节解析。
