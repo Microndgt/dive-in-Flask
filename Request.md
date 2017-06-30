@@ -1,8 +1,13 @@
-- [request上下文对象](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md#request上下文对象)
-- [Flask_Request](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md#Flask_Request)
-- [Werkzeug_Request](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md#Werkzeug_Request)
-- [Werkzeug_BaseRequest](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md#Werkzeug_BaseRequest)
-- [Flask处理请求的过程](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md#Flask处理请求的过程)
+Contents
+===
+
+  - [request上下文对象](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md/#request上下文对象)
+  - [Flask Request](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md/#flask-request)
+  - [Werkzeug Request](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md/#werkzeug-request)
+  - [Werkzeug BaseRequest](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md/#werkzeug-baserequest)
+  - [Flask 处理请求的过程](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md/#flask-处理请求的过程)
+
+
 
 对于 WSGI server 来说，请求又变成了文件流(套接字)，它要读取其中的内容，把 HTTP 请求包含的各种信息保存到一个字典中，调用 WSGI app； 对于 flask app 来说，请求就是一个对象，当需要某些信息的时候，只需要读取该对象的属性或者方法就行了。
 
@@ -31,7 +36,7 @@ if request is None:
 self.request = request
 ```
 
-Flask_Request
+Flask Request
 ---
 
 可以看到request是定义在app中的一个属性，传入了environ参数所创建的，转入Flask类，可以看到一个类属性`request_class = Request`，因此请求上下文对象中的request属性是Request类的一个实例，继续向上溯源，可以得到Request类的源码：
@@ -162,7 +167,7 @@ def attach_enctype_error_multidict(request):
     request.files.__class__ = newcls
 ```
 
-Werkzeug_Request
+Werkzeug Request
 ---
 
 这是Flask中对于Request进行的扩展，但是究竟从environ如何创建出一个Request对象呢，那么就必须继续向上探索，这将到werkzeug了，点击RequestBase，进入到了werkzeug/wrappers.py中的Request类
@@ -183,7 +188,7 @@ class Request(BaseRequest, AcceptMixin, ETagRequestMixin,
 
 对于混入类，有几点需要记住。首先是，混入类不能直接被实例化使用。 其次，混入类没有自己的状态信息，也就是说它们并没有定义 `__init__()` 方法，并且没有实例属性。
 
-Werkzeug_BaseRequest
+Werkzeug BaseRequest
 ---
 
 首先研究BaseRequest这个类：
@@ -478,7 +483,7 @@ class BaseRequest(object):
 
 这个类相当长，所包含内容也相当多，这里只对基本的内容做了解析，其他的内容暂时没有深入去解析。
 
-Flask处理请求的过程
+Flask 处理请求的过程
 ---
 
 既然已经将从werkzeug以及到Flask中的Request类以及请求上下文都解析了一遍，那么下来就应该看看Flask如何处理这些请求的。
