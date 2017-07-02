@@ -11,8 +11,8 @@ Contents
 - [细节问题](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#细节问题)
   - [environ 变量](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#environ-变量)
   - [输入和错误流](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#输入和错误流)
-  - [start_response()可调用对象](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#start_response()可调用对象)
-  - [处理`Content-Length`头](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#处理`content-length`头)
+  - [start_response()可调用对象](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#start_response可调用对象)
+  - [处理`Content-Length`头](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#处理content-length头)
   - [缓存和流](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#缓存和流)
 
 翻译自[https://www.python.org/dev/peps/pep-3333/](https://www.python.org/dev/peps/pep-3333/)
@@ -338,7 +338,7 @@ environ字典需要包含在CGI说明中定义的CGI的环境变量，下列的�
 |   read(size)   | 输入 |  1 |
 |   readline()  | 输入 |  1,2 |
 |   readlines(hint)   | 输入 |  1,3 |
-|   __iter__()   | 输入 |  1 |
+|   `__iter__()`   | 输入 |  1 |
 |   flush()   | 错误 |  4 |
 |   write(str)   | 错误 |   |
 |   writelines(seq)  | 错误 |  |
