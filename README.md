@@ -4,6 +4,11 @@ dive in Flask, werkzeug and wsgi etc.
 ![](https://img.shields.io/badge/Python-3.5-green.svg)
 ![](https://img.shields.io/badge/Flask-0.13_dev-green.svg)
 ![](https://img.shields.io/badge/Werkzeug-0.11.11-green.svg)
+![](https://img.shields.io/badge/socketserver-0.4-green.svg)
+![](https://img.shields.io/badge/http.server-0.6-green.svg)
+
+![](https://img.shields.io/badge/functools--green.svg)
+![](https://img.shields.io/badge/io--green.svg)
 
 - [WSGI](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md) - under construction...
 - [Flask Start](https://github.com/Microndgt/dive-in-Flask/blob/master/flask-start.md) - under construction...

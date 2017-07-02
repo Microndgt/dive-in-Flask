@@ -1,3 +1,20 @@
+Contents
+===
+
+- [摘要](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#摘要)
+- [基本原理和目标](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#基本原理和目标)
+- [系统规范综述](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#系统规范综述)
+  - [字符串类型](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#字符串类型)
+  - [应用/框架 端](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#应用框架-端)
+  - [服务器/网关 端](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#服务器网关-端)
+  - [middleware](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#middleware)
+- [细节问题](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#细节问题)
+  - [environ 变量](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#environ-变量)
+  - [输入和错误流](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#输入和错误流)
+  - [start_response()可调用对象](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#start_response()可调用对象)
+  - [处理`Content-Length`头](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#处理`content-length`头)
+  - [缓存和流](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#缓存和流)
+
 翻译自[https://www.python.org/dev/peps/pep-3333/](https://www.python.org/dev/peps/pep-3333/)
 
 摘要
@@ -279,4 +296,114 @@ start_response可调用对象必须返回一个`write(body_data)`接受一个位
 最后，服务器或者网关不能直接使用应用返回的迭代器的任何属性，除非是指定给服务器或者网关的类型的实例，比如`wsgi.file_wrapper`返回的file wrapper。一般来讲，只有指定的属性或者是迭代API允许的属性可以被接受。
 
 environ 变量
+---
+
+environ字典需要包含在CGI说明中定义的CGI的环境变量，下列的变量必须出现，除非它们的值是空字符串，在这种情况下这个变量会被省略，除非另有说明。
+
+- `REQUEST_METHOD` 不能为空，必须给定
+- `SCRIPT_NAME` 对应应用对象的请求URL路径的初始部分，这样应用就知道它的虚拟路径。如果应用对应服务器的root，那么可能是空字符串
+- `PATH_INFO` 请求URL路径，在应用中标明请求目标的虚拟路径，如果请求URL的目标是应用根路径并且没有尾斜线，那么可能是空字符串。
+- `QUERY_STRING` 请求URL中?后面的部分，可能为空，也可能缺失
+- `CONTENT_TYPE` HTTP请求的内容类型，可能为空，也可能缺失
+- `CONTENT_LENGTH` HTTP请求中的内容长度，可能为空，也可能缺失
+- `SERVER_NAME, SERVER_PORT` 和SCRIPT_NAME和PATH_INFO组合起来，这两个字符串可以用来完整的得到URL。如果HTTP_HOST出现的话，应该优先于SERVER_NAME来重建请求URL。这两个值不能为空，必须给定
+- `SERVER_PROTOCOL` 客户端发送数据给服务器使用的协议版本，一般应该是`HTTP/1.0`或者是`HTTP/1.1`，会被应用用来决定如何处理HTTP请求头(这个变量应该被叫做`REQUEST_PROTOCOL`，因为它表示了在请求中使用的协议，并且没有必要服务器的响应也使用这个协议，然而，为了CGI的兼容性，现在必须使用这个名字)
+- `HTTP_` 变量 对应客户端提供的请求头的变量，这些变量出现与否应该对应于请求报头中相应变量的出现与否。
+
+一个服务器应该视图提供更多适用的其他CGI变量。另外，如果使用SSL，服务器也应该提供尽可能多的可使用的SSL环境变量，比如`HTTPS=on`和`SSL_PROTOCOL`。然而，对于一些不支持相关扩展的web服务器来说使用其他的CGI变量的应用可能是不兼容的(比如，web服务器不发布文件的话就不会提供`DOCUMENT_ROOT`或者`PATH_TRANSLATED`)。
+
+服从WSGI的服务器应该有提供何种变量的文档以及相关详细信息。应用应该检查它们需要的参数是否存在，并且有一个如果变量不存在的时候的备用方案。
+
+缺失的变量（比如当没有权限的时候`REMOTE_USER`缺失）应该被environ字典抛弃。并且CGI定义的变量如果出现的话必须是本地字符串。CGI变量值如果不是str的话，都是不遵守本协议的行为。
+
+除了CGI定义的变量，environ字典也可能包含一些操作系统环境变量，并且必须包含下列的WSGI定义的变量。
+
+- `wsgi.version`: 元组（1，0）表示WSGI版本1.0
+- `wsgi.url_scheme`: 协议名，http或者https
+- `wsgi.input` 读取http请求体数据的输入流（服务器可能按应用请求所需读取数据，或者可能预先读取数据并且缓存在内存或者磁盘里，或者使用其他技术来提供输入流）
+- `wsgi.errors`: 输出错误流，为了以一种标准和集中的输出位置记录程序或者其他的错误。应该是文本模式流，也就是应用必须用`\n`来表示行的结尾，假定其可以被服务器转换成正确的行尾。（如果str类型是unicode，错误流应该接受并且不产生错误的记录任意的unicode。然而也被允许去替换这个字符如果不能被流的编码渲染）。对于大多数服务器，`wsgi.errors`将会是服务器的主要错误记录。可选的可能是`sys.stderr`，或者是一个日志文件等。服务器的文档应该包含如何去配置或者哪里去找到相应的记录。服务器可以根据需要可能给不同的应用提供不同的错误流。
+- `wsgi.multithread` 如果可能在一个进程中其他线程中同时调用的应用对象的话，这个值应该是True，其他情况应该是False
+- `wsgi.multiprocess` 如果可能在其他进程中同时调用这个app，这个值应该被置为True，否则为False
+- `wsgi.run_once` 如果服务器期望这个应用只会在其进程中同时只有一个存在，这个值就应该是True，一般来讲，这个只会在CGI为基础的服务器上为True。
+
+最后，environ字典可能包含服务器定义的变量，这些变量应该以小写单词，数字，点和下划线命名，并且应该以和定义服务器的名字相独立，比如`mod_python`可能定义一些变量名字是`mod_python.some_variable`
+
+输入和错误流
+---
+
+服务器提供的输入和错误流必须支持下面的方法
+
+|    方法    | 流          | 说明  |
+| ------------- |:-------------:| :-----:|
+|   read(size)   | 输入 |  1 |
+|   readline()  | 输入 |  1,2 |
+|   readlines(hint)   | 输入 |  1,3 |
+|   __iter__()   | 输入 |  1 |
+|   flush()   | 错误 |  4 |
+|   write(str)   | 错误 |   |
+|   writelines(seq)  | 错误 |  |
+
+每个方法的含义都在Python标准库参考中记录着，除了下面的这些说明。
+
+1. 服务器不需要读取客户端指定`content-length`之外的内容，应该在应用要读取超过那个点的时候模拟一个`end-of-file`的情况。应用不应该尝试读取超过`content-length`指定长度更多的内容。服务器应该允许read方法不传递参数的调用，返回客户端输入流的其余部分。服务器应该在读取一个空的输入流时候返回空的Bytestrings
+2. 服务器应该支持readline()可选的size参数，但是在WSGI1.0，它们允许被忽略。在WSGI1.0，size参数没有被支持，因为可能实现起来太复杂，并且在实践中不是经常使用。但是cgi模块已经开始使用它了，所以实际中的服务器必须开始支持了！
+3. hint参数对调用者和实现者来说都是可选的。应用可以选择是否提供，服务器也可以选择是否忽略。
+4. 因为错误流可能不后退,服务器和网关可以自由提出立即写操作,没有缓冲。在这种情况下，flush操作可能是一个空操作。然而对于便携式应用不能假定输出是没有缓存的，或者flush操作是空操作。必须调用flush如果需要确定输出已经被写入。比如，为了最小化从不同的进程写入到相同的错误记录时数据的交织。
+
+所有的遵从本说明的服务器都必须支持上面列出的方法。遵从本协议的应用必须不能使用input和errors对象的任意其他的方法。特别的，应用不能尝试关闭这些流，即使它们执行了close方法。
+
+start_response()可调用对象
+---
+
+传递给应用对象的第二个参数是以下面这种形式的`start_response(status, response_headers, exc_info=None)`，对于所有的WSGI调用对象来讲，参数必须以位置参数的形式给定而不是关键字参数。这个函数用来开始HTTP响应，而且必须返回一个`write(body_data)`调用对象。
+
+status参数是一个http状态比如"200 OK"。包含了一个状态码和信息短语，通过一个单个的空格分开，没有其他的空格和字符。该字符串不能含有其他控制字符，并且不能以换行，回车，或者它们的组合结尾。
+
+响应头是一个列表元组，元组是以下列这种形式`(header_name, header_value)`，应该是Python列表。也就是说`type(response_headers)`是列表类型的，服务器可以根据其需要改变headers的内容。每个`header_name`都必须是一个有效的HTTP header字段名字，没有结尾冒号或者其他的标点符号。
+
+每一个`header_value`不能包含任何的控制字符，包括回车和换行，不论是在值中间或者是在结尾。这一需求减少了服务器，或者中间的响应处理器需要检查或者修改响应头的解析的复杂度。
+
+一般来说，服务器需要确保发送给客户端的响应头是正确的。如果应用省略了一个HTTP需要的头，服务器必须加上它。比如，`Date:`和`Server:`头必须由服务器提供。
+
+提醒：HTTP头的名字是区分大小写的，所以确保在检查应用提供的头时候考虑到这一点。
+
+应用或者中间件被拒绝使用`HTTP/1.1`的`hop-by-hop`特性或者头，或者`HTTP/1.0`的相关特性，或者其他可能会影响客户端到web服务器的连接的持久性的头。这些特性是真实的web服务器专属的，一个服务器应该考虑一个应用尝试传送这些header是一个严重的错误，如果提供给`start_response`应该引发错误。
+
+服务器应该检查`start_response`调用是后出现在headers的错误，这样当应用还在运行的时候可以引发错误。
+
+然而，`start_response`不能实际的传输响应头。相反的，它必须为服务器存储它们，只有当第一次迭代应用返回的非空值的时候传输。或者应用第一次调用write函数。也就是说，响应头必须知道它们真实的响应体数据准备好了之后才能传输。或者是在应用返回值失效的时候（唯一一种情况是响应头显式的包含了`Content-Length`为0
+
+响应头延迟发送是为了确保缓存和异步的应用可以替换它们的最初输出为错误输出，一直到最后可能的时刻。比如，如果一个错误发生，但是响应体是在应用缓存中生成的，所以应用可能需要改变响应状态从"200 OK"到"500 Internal Error"。
+
+`exc_info`参数，如果提供了，必须是一个`sys.exc_info()`的元组(type, value, traceback)，只有当`start_response`被一个错误处理器调用的时候，这个参数才会被应用提供。如果这个参数被提供，并且还没有HTTP的头被输出，`start_response`就应该改变现有的HTTP响应头，因此允许应用当错误发生的时候改变输出。
+
+然后，如果`exc_info`被提供，但是HTTP headers已经被发送，`start_response`必须引发一个错误，然后使用`exc_info`重新引发一个错误:`raise exc_info[1].with_traceback(exc_info[2])`
+
+这将重新引发应用捕获的异常，原则上应该中止应用（一旦HTTP头已经被发送应用就尝试给浏览器错误输出，这样是不安全的）。如果以`exc_info`调用`start_response`，那么应用不可以捕捉任何`start_response`引发的异常。相反的，应用应该传播这样的异常到服务器。
+
+只有当`exc_info`参数提供的时候，应用可以调用`start_response`多次。更精确的说，在当前应用调用中，如果`start_response`已经被调用了，没有`exc_info`参数地再次调用`start_response`将是一个严重的错误。这包含了第一次调用`start_response`就出现错误的情况。
+
+实现了`start_response`的服务器，或者中间件应该确保在函数运行期间没有到`exc_info`的引用。这是为了避免在traceback和框架之间的循环引用。最简单的方式如下：
+
+```
+def start_response(status, response_headers, exc_info=None):
+    if exc_info:
+        try:
+        # do stuff w/exc_info here
+        finally:
+            exc_info = None    # Avoid circular ref.
+```
+
+处理`Content-Length`头
+---
+
+如果应用支持`Content-Length`头，那么服务器就不应该向客户端传递多于header所描述的长度的数据，应该在有足够数据已经发送的时候结束迭代，或者在应用可能超过这个点的时候引发错误。（当然，如果发送的数据不够的时候，服务器应该关闭链接并且记录或者报告错误）
+
+如果应用不支持`Content-Length`头，服务器应该选择合适的方法处理它。最简单的方法是当响应完成的时候关闭客户端链接。
+
+在某些情况下，服务器可能可以要么自己生成一个`Content-Length`头，以拒绝关闭客户端链接的需求。如果应用没有调用write，并且返回了一个长度是1的可迭代对象，那么服务器可以自动的使用可迭代对象生成的第一个bytestring的长度作为`Content-Length`。
+
+并且，如果服务器和客户端都支持`HTTP/1.1` "chunked encoding"，服务器可以使用块编码，对于每一个write调用发送一个块或者可迭代对象生成的bytestring，因此为每一个块生成一个`Content-Length`。这样允许服务器保持客户端链接。服务器必须完全遵从RFC2616，否则在处理`Content-Length`缺失问题的时候使用其他策略之一。
+
+缓存和流
 ---

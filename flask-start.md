@@ -401,3 +401,217 @@ WSGI服务器，最重要的一点是加入了app参数，这样以后才可以�
 
 RequestHandler
 ===
+
+请求处理器的继承关系为`BaseRequestHandler->socketserver.StreamRequestHandler->BaseHTTPRequestHandler->WSGIRequestHandler`
+
+BaseRequestHandler
+---
+
+```
+class BaseRequestHandler:
+    '''请求处理器类的基类，对于每一个请求实例化并且处理，首先创建了request，client_address和server实例变量，然后调用handler方法，为了应用在指定的服务上，必须派生这个类然后定义handle方法。由于为每一个请求独立的创建了实例，因此handle方法可以定义其他任意的实例变量.'''
+
+    def __init__(self, request, client_address, server):
+        # request即是一个TCP连接对象
+        self.request = request
+        self.client_address = client_address
+        self.server = server
+        self.setup()
+        try:
+            self.handle()
+        finally:
+            self.finish()
+
+    def setup(self):
+        pass
+
+    def handle(self):
+        pass
+
+    def finish(self):
+        pass
+```
+
+可以看到传入一个建立的TCP连接，以及连接信息，服务器信息，来此进行请求的处理，首先调用了setup方法进行初始化工作，然后是调用handle方法实际处理请求，最后调用finish来清理结束工作。
+
+socketserver.StreamRequestHandler
+---
+
+```
+class StreamRequestHandler(BaseRequestHandler):
+    '''self.rfile和self.wfile用于流套接字的处理'''
+
+    # 读有缓存是因为如果没有缓存读取大数据可能非常慢
+    # 写没有缓存是因为在写完之后需要读取，因此需要flush
+    # 大量数据写入没有缓存可以有最大的利用率
+    rbufsize = -1
+    wbufsize = 0
+    timeout = None
+
+    # nagle算法，减少包的数量，即减少长度比较小的包的发送
+    disable_nagle_algorithm = False
+
+    def setup(self):
+        self.connection = self.request
+        if self.timeout is not None:
+            self.connection.settimeout(self.timeout)
+        if self.disable_nagle_algorithm:
+            self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, True)
+        # 创建读写套接字
+        self.rfile = self.connection.makefile('rb', self.rbufsize)
+        self.wfile = self.connection.makefile('wb', self.wbufsize)
+
+    def finish(self):
+        if not self.wfile.closed:
+            try:
+                self.wfile.flush()
+            except socket.error:
+                # A final socket error may have occurred here, such as
+                # the local error ECONNABORTED.
+                pass
+        self.wfile.close()
+        self.rfile.close()
+```
+
+流请求处理器做了这么几件事情，重写了setup方法，如果需要，设置超时时间，设置nagle算法。并且创建了读写套接字，设置其缓存。重写结束方法，对读写套接字进行清理。
+
+BaseHTTPRequestHandler
+---
+
+```
+class BaseHTTPRequestHandler(socketserver.StreamRequestHandler):
+    '''这里就到了HTTP的请求处理器了。
+    一个请求有三部分：
+    1. 指示请求类型和路径以及HTTP协议的请求行
+    2. 消息报头，包含各种参数
+    3. 请求体，即正文数据
+
+    消息报头和数据是通过一个空行分离的
+
+    返回第一行必须是响应行，然后是响应头，然后一个空行，接下来是真实数据。如果有数据，那么至少应该有这么一个头Content-type: <type>/<subtype>
+    '''
+
+    sys_version = "Python/" + sys.version.split()[0]
+
+    protocol_version = "HTTP/1.0"
+
+    server_version = "BaseHTTP/" + __version__
+
+    error_message_format = DEFAULT_ERROR_MESSAGE
+    error_content_type = DEFAULT_ERROR_CONTENT_TYPE
+
+    default_request_version = "HTTP/0.9"
+
+    def handle(self):
+        '''处理多个请求'''
+        self.close_connection = True
+        self.handle_one_request()
+        while not self.close_connection:
+            self.handle_one_request()
+
+    def handle_one_request(self):
+        '''处理单个的HTTP请求'''
+        try:
+            # 获取请求行
+            self.raw_requestline = self.rfile.readline(65537)
+            # 请求行太长，一般都是URI太长
+            if len(self.raw_requestline) > 65536:
+                self.requestline = ''
+                self.request_version = ''
+                self.command = ''
+                self.send_error(HTTPStatus.REQUEST_URI_TOO_LONG)
+                return
+            if not self.raw_requestline:
+                self.close_connection = True
+                return
+            if not self.parse_request():
+                return
+
+    def parse_request(self):
+        '''解析一个请求，请求应该被存储在self.raw_requestline, 结果在self.command, self.path, self.request_version和self.request_version
+        返回True为成功，False是失败，并且错误会被发送回去'''
+        self.command = None
+        self.request_version = version = self.default_request_version
+        self.close_connection = True
+        # 直接用编码来decode数据，返回str
+        requestline = str(self.raw_requestline, 'iso-8859-1')
+        requestline = requestline.rstrip('\r\n')
+        words = requestline.split()
+        if len(words) == 3:
+            command, path, version = words
+            if version[:5] != 'HTTP/':
+                self.send_error(
+                    HTTPStatus.BAD_REQUEST,
+                    "Bad request version (%r)" % version)
+                return False
+            try:
+                base_version_number = version.split('/', 1)[1]
+                version_number = base_version_number.split(".")
+                if len(version_number) != 2:
+                    raise ValueError
+                version_number = int(version_number[0]), int(version_number[1])
+            except (ValueError, IndexError):
+                self.send_error(
+                    HTTPStatus.BAD_REQUEST,
+                    "Bad request version (%r)" % version)
+                return False
+            if version_number >= (1, 1) and   self.protocol_version >= "HTTP/1.1":
+                self.close_connection = False
+            if version_number >= (2, 0):
+                self.send_error(
+                    HTTPStatus.HTTP_VERSION_NOT_SUPPORTED,
+                    "Invalid HTTP Version (%s)" % base_version_number)
+                return False
+        elif len(words) == 2:
+            command, path = words
+            self.close_connection = True
+            if command != 'GET':
+                self.send_error(
+                    HTTPStatus.BAD_REQUEST,
+                    "Bad HTTP/0.9 request type (%r)" % command)
+                return False
+        elif not words:
+            return False
+        else:
+            self.send_error(
+                HTTPStatus.BAD_REQUEST,
+                "Bad request syntax (%r)" % requestline)
+            return False
+        self.command, self.path, self.request_version = command, path, version
+        try:
+            self.headers = http.client.parse_headers(self.rfile,
+                                                     _class=self.MessageClass)
+        except http.client.LineTooLong:
+            self.send_error(
+                HTTPStatus.BAD_REQUEST,
+                "Line too long")
+            return False
+        except http.client.HTTPException as err:
+            self.send_error(
+                HTTPStatus.REQUEST_HEADER_FIELDS_TOO_LARGE,
+                "Too many headers",
+                str(err)
+            )
+            return False
+
+        conntype = self.headers.get('Connection', "")
+        if conntype.lower() == 'close':
+            self.close_connection = True
+        elif (conntype.lower() == 'keep-alive' and
+              self.protocol_version >= "HTTP/1.1"):
+            self.close_connection = False
+        # Examine the headers and look for an Expect directive
+        expect = self.headers.get('Expect', "")
+        if (expect.lower() == "100-continue" and
+                self.protocol_version >= "HTTP/1.1" and
+                self.request_version >= "HTTP/1.1"):
+            if not self.handle_expect_100():
+                return False
+        return True
+
+    def handle_expect_100(self):
+        '''处理请求头出现Expect: 100-continue。如果客户端等待一个100-continue的响应，我们必须给出一个100-continue或者结束响应，在实际接受数据之前。默认是直接发送100-continue响应，但是你也可以直接拒绝没有授权的请求。该方法应该返回True或者返回False并且发送错误响应"
+        self.send_response_only(HTTPStatus.CONTINUE)
+        self.end_headers()
+        return True
+```
