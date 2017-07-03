@@ -1,20 +1,355 @@
 Contents
 ===
 
-  - [request上下文对象](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md/#request上下文对象)
-  - [Flask Request](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md/#flask-request)
-  - [Werkzeug Request](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md/#werkzeug-request)
-  - [Werkzeug BaseRequest](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md/#werkzeug-baserequest)
-  - [Flask 处理请求的过程](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md/#flask-处理请求的过程)
+- [Flask中请求处理过程](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md#flask中请求处理过程)
+- [请求上下文](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md#请求上下文)
+- [Request类](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md#request类)
+  - [Flask Request](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md#flask-request)
+  - [Werkzeug Request](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md#werkzeug-request)
+  - [Werkzeug BaseRequest](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md#werkzeug-baserequest)
+- [总结](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md#总结)
 
+Contents Created by [Toggle](https://github.com/Microndgt/toggle)
 
+Request V0.1. Released at 2017/07/03.
 
-对于 WSGI server 来说，请求又变成了文件流(套接字)，它要读取其中的内容，把 HTTP 请求包含的各种信息保存到一个字典中，调用 WSGI app； 对于 flask app 来说，请求就是一个对象，当需要某些信息的时候，只需要读取该对象的属性或者方法就行了。
+对于WSGI server来说，请求又变成了文件流(套接字)，它要读取其中的内容，把 HTTP 请求包含的各种信息保存到一个字典中，调用 WSGI app;对于flask app来说，请求就是一个对象，当需要某些信息的时候，只需要读取该对象的属性或者方法就行了。那么flask app是如何做到从environ到request对象的转换呢，request对象实际在flask中是如何存储运作的呢。本文就是要解决这些问题。
+
+Flask中请求处理过程
+===
+
+从上节flask的启动流程继续，当WSGI Server调用了app，并且传递进来`environ`和`start_response`。按
+照WSGI协议，Flask应用要实现一个可调用对象，在Flask中就是`__call__()`方法：
+
+```
+def __call__(self, environ, start_response):
+        """Shortcut for :attr:`wsgi_app`."""
+        return self.wsgi_app(environ, start_response)
+```
+
+`__call__()`方法调用了`wsgi_app()`方法：
+
+```
+def wsgi_app(self, environ, start_response):
+    ctx = self.request_context(environ)
+    ctx.push()
+    error = None
+    try:
+        try:
+            response = self.full_dispatch_request()
+        except Exception as e:
+            error = e
+            response = self.handle_exception(e)
+        return response(environ, start_response)
+    finally:
+        if self.should_ignore_error(error):
+            error = None
+        ctx.auto_pop(error)
+```
+
+在`wsgi_app`方法上，可以看到，首先通过传入的environ创建了一个请求上下文对象，然后将自己入栈，在此同时，如果没有应用上下文，也会将应用上下文入栈。结下来就是分发请求到视图函数上进行处理。所以跳到`self.full_dispatch_request`方法上。
+
+```
+def full_dispatch_request(self):
+    '''分发请求，并且在这之前进行请求预处理和后处理并且处理HTTP异常和错误'''
+    self.try_trigger_before_first_request_functions()
+    try:
+        request_started.send(self)
+        rv = self.preprocess_request()
+        if rv is None:
+            rv = self.dispatch_request()
+    except Exception as e:
+        rv = self.handle_user_exception(e)
+    return self.finalize_request(rv)
+```
+
+首先是处理整个app第一个请求，每个app启动时候只处理一次，在应用上就是使用`before_first_request`装饰器
+
+```
+def try_trigger_before_first_request_functions(self):
+    '''在每个请求处理之前调用确保触发了before_first_request_funcs，对于每一个应用实例只执行一次'''
+    # 表征是否接受到了第一个请求
+    if self._got_first_request:
+        return
+    with self._before_request_lock:
+        if self._got_first_request:
+            return
+        for func in self.before_first_request_funcs:
+            func()
+        self._got_first_request = True
+```
+
+这里在app处理第一个请求前，`self._got_first_request`为False，因此会执行所有被`before_first_request`装饰器装饰的函数，因为涉及到公用属性的修改，可能app有多个线程来处理请求，因此需要获得锁，这些函数只需要执行一次，执行完毕之后，`self._got_first_request`被置为True
+
+执行完毕之后，`request_started`开始发送信号，表示请求处理开始，这些信号可以在实际开发应用中使用，进行信号订阅来执行相关动作。里面包含了许多在Flask应用状态改变的信号：
+
+```
+signals_available = False
+try:
+    from blinker import Namespace
+    signals_available = True
+except ImportError:
+    class Namespace(object):
+        def signal(self, name, doc=None):
+            return _FakeSignal(name, doc)
+    class _FakeSignal(object):
+        """If blinker is unavailable, create a fake class with the same
+        interface that allows sending of signals but will fail with an
+        error on anything else.  Instead of doing anything on send, it
+        will just ignore the arguments and do nothing instead.
+        """
+
+        def __init__(self, name, doc=None):
+            self.name = name
+            self.__doc__ = doc
+        def _fail(self, *args, **kwargs):
+            raise RuntimeError('signalling support is unavailable '
+                               'because the blinker library is '
+                               'not installed.')
+        send = lambda *a, **kw: None
+        connect = disconnect = has_receivers_for = receivers_for = \
+            temporarily_connected_to = connected_to = _fail
+        del _fail
+_signals = Namespace()
+template_rendered = _signals.signal('template-rendered')
+before_render_template = _signals.signal('before-render-template')
+request_started = _signals.signal('request-started')
+request_finished = _signals.signal('request-finished')
+request_tearing_down = _signals.signal('request-tearing-down')
+got_request_exception = _signals.signal('got-request-exception')
+appcontext_tearing_down = _signals.signal('appcontext-tearing-down')
+appcontext_pushed = _signals.signal('appcontext-pushed')
+appcontext_popped = _signals.signal('appcontext-popped')
+message_flashed = _signals.signal('message-flashed')
+```
+
+这里需要从blinker获取支持，导入Namespace，从而创建信号，但是如果导入失败，那么就应该给一个友好的提示，这里就创建了一个Namespace类，使用了一个可以进行传送信号，但是会失败的类。使用Namespace的好处是唯一的信号名，并且将不同的信号源独立起来，这样方便编码和区分调试。关于Flask中信号的使用，见[Flask信号](http://skyrover.me/post/16/)
+
+发送信号之后，调用`rv = self.preprocess_request()`进行请求预处理，这里处理的是`before_request`装饰的函数，也就是在每个请求前进行处理的东西。Flask的钩子函数就是这样的处理机制。
+
+```
+def preprocess_request(self):
+    '''在真实请求分发前调用，会调用before_request装饰的函数，不传递参数。
+    如果其中任何一个函数返回了值，那么就把这个值当成了视图函数的返回，后续的请求处理将会停止。
+    这也会触发url_value_preprocessor函数，在before_request函数之前调用
+    '''
+    bp = _request_ctx_stack.top.request.blueprint
+    funcs = self.url_value_preprocessors.get(None, ())
+    # URL处理器
+    if bp is not None and bp in self.url_value_preprocessors:
+        funcs = chain(funcs, self.url_value_preprocessors[bp])
+    for func in funcs:
+        func(request.endpoint, request.view_args)
+    # 请求前处理，如果有返回值，那么就返回，返回后就不会继续下一步的请求了
+    funcs = self.before_request_funcs.get(None, ())
+    if bp is not None and bp in self.before_request_funcs:
+        funcs = chain(funcs, self.before_request_funcs[bp])
+    for func in funcs:
+        rv = func()
+        if rv is not None:
+            return rv
+```
+
+预处理请求部分主要完成的任务是，url处理器和`before_request`的处理内容。完成预处理请求部分之后，如果没有返回值，那么分发请求到真实的视图函数上。
+
+```
+def dispatch_request(self):
+    '''请求分发，匹配URL并且返回视图函数或者错误处理器的值，不必是一个响应对象。可以调用make_response来将返回值加工成一个响应对象。
+    '''
+    req = _request_ctx_stack.top.request
+    if req.routing_exception is not None:
+        self.raise_routing_exception(req)
+    rule = req.url_rule
+    # 如果自动处理options请求
+    if getattr(rule, 'provide_automatic_options', False) \
+           and req.method == 'OPTIONS':
+        return self.make_default_options_response()
+    # 分发请求到路由函数上
+    return self.view_functions[rule.endpoint](**req.view_args)
+```
+
+这里的请求分发就是路由系统做的事情，定位到响应的视图函数中执行处理，获取路由函数的返回值后，就调用`self.finalize_request(rv)`来包装返回值为response对象，自此正常的请求的处理基本完成。
+
+请求上下文
+===
+
+查看`self.request_context()`方法：
+
+```
+def request_context(self, environ):
+    '''从给定的环境中创建请求上下文，并且绑定当前上下文上。必须使用with语句因为with可以让其绑定到当前的上下文中。
+    with app.request_context(environ):
+        do_something_with(request)
+    当然也可以不使用with语句
+    ctx = app.request_context(environ)
+        ctx.push()
+    try:
+        do_something_with(request)
+    finally:
+        ctx.pop()
+    '''
+    return RequestContext(self, environ)
+```
+
+下面是RequestContext的定义：
+
+```
+class RequestContext(object):
+    '''请求上下文包含所有请求相关的信息，在请求一开始的时候创建，然后进入_request_ctx_stack栈中，在结束的时候移除。它会创建一个URL适配器和基于WSGI环境的请求对象。
+    不要直接使用这个类，而是使用Flask.test_request_context和Flask.request_context
+
+    当请求上下文出栈的时候，它会执行所有注册在Flask.teardown_request上面的函数
+
+    请求上下文会自动出栈。在debug模式中，如果出现异常请求上下文会保留，这样交互式的debuggers才可以去检查数据。
+    '''
+
+    def __init__(self, app, environ, request=None):
+        self.app = app
+        if request is None:
+            # 创建一个请求对象，保存请求的相关信息
+            request = app.request_class(environ)
+        self.request = request
+        # 创建一个url适配器,这个是路由系统做的事情
+        self.url_adapter = app.create_url_adapter(self.request)
+        self.flashes = None
+        # session也是请求上下文对象的一部分
+        self.session = None
+
+        # 请求上下文对象可能会被多次入栈，并且和其他上下文对象交错，所以只有等到其他的曾被pop之后才开始处理这个上下文。另外如果应用上下文缺失的话，就会隐式的为每一层请求上下文创建一个应用上下文
+        self._implicit_app_ctx_stack = []
+        # 指示上下文是否要保存，False 下一个上下文压栈则这个上下文就会弹出
+        self.preserved = False
+
+        self._preserved_exc = None
+        self._after_request_functions = []
+        # url适配器来匹配url
+        self.match_request()
+
+    def _get_g(self):
+        return _app_ctx_stack.top.g
+
+    def _set_g(self, value):
+        _app_ctx_stack.top.g = value
+
+    # 将g作为一个属性
+    g = property(_get_g, _set_g)
+    del _get_g, _set_g
+
+    def copy(self):
+        '''使用相同的请求对象创建一个请求上下文的拷贝，可以用来将
+        一个请求上下文移动到不同的greenlet（协程)，因为实际的请求对象是一样的，所以不能用来移动到不同的线程中，除非加锁。'''
+
+        return self.__class__(self.app,
+            environ=self.request.environ,
+            request=self.request
+        )
+
+    def match_request(self):
+        '''url适配器的工作，url_adapter.match返回一个Rule对象url_rule```
+        try:
+            url_rule, self.request.view_args = \
+                self.url_adapter.match(return_rule=True)
+            self.request.url_rule = url_rule
+        except HTTPException as e:
+            self.request.routing_exception = e
+
+    def push(self):
+        '''绑定应用上下文到目前的上下文中'''
+        top = _request_ctx_stack.top
+        # 如果在debug模式有异常发生或者在出现异常上下文保存被激活，那么就会有一个上下文在栈中。
+        # 其原理就是在debug模式想要获取上下文的信息。然而如果有人忘记将上下文出栈，那么我们要保证下一次入栈时候这个上下文就无效。否则就可能有内存泄漏的可能。
+        if top is not None and top.preserved:
+            top.pop(top._preserved_exc)
+
+        # 在请求上下文入栈前需要保证将有一个应用上下文。
+
+        app_ctx = _app_ctx_stack.top
+        if app_ctx is None or app_ctx.app != self.app:
+            app_ctx = self.app.app_context()
+            app_ctx.push()
+            self._implicit_app_ctx_stack.append(app_ctx)
+        else:
+            # 如果top是当前的应用，隐式的上下文栈进入None
+            self._implicit_app_ctx_stack.append(None)
+
+        if hasattr(sys, 'exc_clear'):
+            sys.exc_clear()
+        # 请求上下文入栈
+        _request_ctx_stack.push(self)
+
+        self.session = self.app.open_session(self.request)
+        if self.session is None:
+            self.session = self.app.make_null_session()
+
+    def pop(self, exc=_sentinel):
+        '''弹出请求上下文，并且解除绑定，并且会触发注册在teardown_request的函数'''
+        app_ctx = self._implicit_app_ctx_stack.pop()
+        try:
+            clear_request = False
+            # 如果app_ctx为False，表示没有创建新的app上下文
+            if not self._implicit_app_ctx_stack:
+                self.preserved = False
+                self._preserved_exc = None
+                if exc is _sentinel:
+                    exc = sys.exc_info()[1]
+                self.app.do_teardown_request(exc)
+                if hasattr(sys, 'exc_clear'):
+                    sys.exc_clear()
+                request_close = getattr(self.request, 'close', None)
+                if request_close is not None:
+                    request_close()
+                clear_request = True
+        finally:
+            rv = _request_ctx_stack.pop()
+            if clear_request:
+                rv.request.environ['werkzeug.request'] = None
+
+            # Get rid of the app as well if necessary.
+            if app_ctx is not None:
+                app_ctx.pop(exc)
+            assert rv is self, 'Popped wrong request context.  ' \
+                '(%r instead of %r)' % (rv, self)
+    def auto_pop(self, exc):
+        if self.request.environ.get('flask._preserve_context') or \
+           (exc is not None and self.app.preserve_context_on_exception):
+            self.preserved = True
+            self._preserved_exc = exc
+        else:
+            self.pop(exc)
+
+    def __enter__(self):
+        self.push()
+        return self
+
+    def __exit__(self, exc_type, exc_value, tb):
+        # do not pop the request stack if we are in debug mode and an
+        # exception happened.  This will allow the debugger to still
+        # access the request object in the interactive shell.  Furthermore
+        # the context can be force kept alive for the test client.
+        # See flask.testing for how this works.
+        self.auto_pop(exc_value)
+
+        if BROKEN_PYPY_CTXMGR_EXIT and exc_type is not None:
+            reraise(exc_type, exc_value, tb)
+
+    def __repr__(self):
+        return '<%s \'%s\' [%s] of %s>' % (
+            self.__class__.__name__,
+            self.request.url,
+            self.request.method,
+            self.app.name,
+        )
+```
+
+请求上下文的栈是通过一个线程独立的类来实现的，所以保证了每次对于一个线程来处理请求，这个线程的应用上下文栈和请求上下文的栈都是独立于其他的线程的，这样视图函数就可以直接从栈中获取这些信息。在一个请求中，如果在一个线程中，应用上下文和请求上下文都是在栈中，所以可以取到相关的信息，如果进入了比如Celery的一个worker里面，就可能无法使用这些东西，必须将app入栈，才可以使用`current_app`等信息，也就是给当前处理线程创建一份app的上下文。
+
+Request类
+===
+
+Flask Request
+---
 
 `from flask import request`点击request后可以看到
-
-request上下文对象
----
 
 ```
 request = LocalProxy(partial(_lookup_req_object, 'request'))
@@ -26,7 +361,7 @@ def _lookup_req_object(name):
     return getattr(top, name)
 ```
 
-也就是说request其实是请求上下文栈中的一个上下文对象里面的一个属性，在上一节解析上下文中，研究过请求上下文对象，里面有一个属性是request,一个属性是session,其中request是这样定义的
+也就是说request其实是请求上下文栈中的一个上下文对象里面的一个属性，这个属性其实是一个Request对象。这个request对象是这样定义的
 
 ```
 if request is None:
@@ -36,8 +371,7 @@ if request is None:
 self.request = request
 ```
 
-Flask Request
----
+而`app.request_class`是`request_class = Request`，这个Request类定义在`flask.wrappers`，继承自RequestBase
 
 可以看到request是定义在app中的一个属性，传入了environ参数所创建的，转入Flask类，可以看到一个类属性`request_class = Request`，因此请求上下文对象中的request属性是Request类的一个实例，继续向上溯源，可以得到Request类的源码：
 
@@ -483,148 +817,7 @@ class BaseRequest(object):
 
 这个类相当长，所包含内容也相当多，这里只对基本的内容做了解析，其他的内容暂时没有深入去解析。
 
-Flask 处理请求的过程
----
+总结
+===
 
-既然已经将从werkzeug以及到Flask中的Request类以及请求上下文都解析了一遍，那么下来就应该看看Flask如何处理这些请求的。
-
-```
-def wsgi_app(self, environ, start_response):
-    ctx = self.request_context(environ)
-    ctx.push()
-    error = None
-    try:
-        try:
-            response = self.full_dispatch_request()
-        except Exception as e:
-            error = e
-            response = self.handle_exception(e)
-        return response(environ, start_response)
-    finally:
-        if self.should_ignore_error(error):
-            error = None
-        ctx.auto_pop(error)
-```
-
-回到Flask的`wsgi_app`方法上，可以看到，首先通过传入的environ创建了一个请求上下文对象，然后将自己入栈，在此同时，如果没有应用上下文，也会将应用上下文入栈。结下来就是分发请求到视图函数上进行处理。所以跳到`self.full_dispatch_request`方法上。
-
-```
-def full_dispatch_request(self):
-    '''分发请求，并且在这之前进行请求预处理和后处理并且处理HTTP异常和错误'''
-    self.try_trigger_before_first_request_functions()
-    try:
-        request_started.send(self)
-        rv = self.preprocess_request()
-        if rv is None:
-            rv = self.dispatch_request()
-    except Exception as e:
-        rv = self.handle_user_exception(e)
-    return self.finalize_request(rv)
-```
-
-首先是处理整个app第一个请求，每个app启动时候只处理一次，在应用上就是使用`before_app_first_request`装饰器
-
-```
-def try_trigger_before_first_request_functions(self):
-    '''在每个请求处理之前调用确保触发了before_first_request_funcs，对于每一个应用实例只执行一次'''
-    # 表征是否接受到了第一个请求
-    if self._got_first_request:
-        return
-    with self._before_request_lock:
-        if self._got_first_request:
-            return
-        for func in self.before_first_request_funcs:
-            func()
-        self._got_first_request = True
-```
-
-这里在app处理第一个请求前，`self._got_first_request`为False，因此会执行所有被`before_first_request`装饰器装饰的函数，因为涉及到公用属性的修改，可能app有多个线程来处理请求，因此需要获得锁，这些函数只需要执行一次，执行完毕之后，`self._got_first_request`被置为True
-
-执行完毕之后，`request_started`开始发送信号，表示请求处理开始，这些信号可以在实际开发应用中使用，进行信号订阅，里面包含了许多在Flask应用状态改变的信号：
-
-```
-signals_available = False
-try:
-    from blinker import Namespace
-    signals_available = True
-except ImportError:
-    class Namespace(object):
-        def signal(self, name, doc=None):
-            return _FakeSignal(name, doc)
-    class _FakeSignal(object):
-        """If blinker is unavailable, create a fake class with the same
-        interface that allows sending of signals but will fail with an
-        error on anything else.  Instead of doing anything on send, it
-        will just ignore the arguments and do nothing instead.
-        """
-
-        def __init__(self, name, doc=None):
-            self.name = name
-            self.__doc__ = doc
-        def _fail(self, *args, **kwargs):
-            raise RuntimeError('signalling support is unavailable '
-                               'because the blinker library is '
-                               'not installed.')
-        send = lambda *a, **kw: None
-        connect = disconnect = has_receivers_for = receivers_for = \
-            temporarily_connected_to = connected_to = _fail
-        del _fail
-_signals = Namespace()
-template_rendered = _signals.signal('template-rendered')
-before_render_template = _signals.signal('before-render-template')
-request_started = _signals.signal('request-started')
-request_finished = _signals.signal('request-finished')
-request_tearing_down = _signals.signal('request-tearing-down')
-got_request_exception = _signals.signal('got-request-exception')
-appcontext_tearing_down = _signals.signal('appcontext-tearing-down')
-appcontext_pushed = _signals.signal('appcontext-pushed')
-appcontext_popped = _signals.signal('appcontext-popped')
-message_flashed = _signals.signal('message-flashed')
-```
-
-这里需要从blinker获取支持，导入Namespace，从而创建信号，但是如果导入失败，那么就应该给一个友好的提示，这里就创建了一个Namespace类，使用了一个可以进行传送信号，但是会失败的类。使用Namespace的好处是唯一的信号名，并且将不同的信号源独立起来，这样方便编码和区分调试。关于Flask中信号的使用，见[Flask信号](http://skyrover.me/post/16/)
-
-发送信号之后，调用`rv = self.preprocess_request()`进行请求预处理，这里处理的是`before_request`装饰的函数，也就是在每个请求前进行处理的东西。Flask的钩子函数就是这样的处理机制。
-
-```
-def preprocess_request(self):
-    '''在真实请求分发前调用，会调用before_request装饰的函数，不传递参数。
-    如果其中任何一个函数返回了值，那么就把这个值当成了视图函数的返回，后续的请求处理将会停止。
-    这也会触发url_value_preprocessor函数，在before_request函数之前调用
-    '''
-    bp = _request_ctx_stack.top.request.blueprint
-    funcs = self.url_value_preprocessors.get(None, ())
-    # URL处理器
-    if bp is not None and bp in self.url_value_preprocessors:
-        funcs = chain(funcs, self.url_value_preprocessors[bp])
-    for func in funcs:
-        func(request.endpoint, request.view_args)
-    # 请求前处理，如果有返回值，那么就返回，返回后就不会继续下一步的请求了
-    funcs = self.before_request_funcs.get(None, ())
-    if bp is not None and bp in self.before_request_funcs:
-        funcs = chain(funcs, self.before_request_funcs[bp])
-    for func in funcs:
-        rv = func()
-        if rv is not None:
-            return rv
-```
-
-预处理请求部分主要完成的任务是，url处理器和`before_request`的处理内容。完成预处理请求部分之后，如果没有返回值，那么分发请求到真实的视图函数上。
-
-```
-def dispatch_request(self):
-    '''请求分发，匹配URL并且返回视图函数或者错误处理器的值，不必是一个响应对象。可以调用make_response来将返回值加工成一个响应对象。
-    '''
-    req = _request_ctx_stack.top.request
-    if req.routing_exception is not None:
-        self.raise_routing_exception(req)
-    rule = req.url_rule
-    # 如果自动处理options请求
-    if getattr(rule, 'provide_automatic_options', False) \
-           and req.method == 'OPTIONS':
-        return self.make_default_options_response()
-    # 分发请求到路由函数上
-    return self.view_functions[rule.endpoint](**req.view_args)
-```
-
-获取路由函数的返回值后，就调用`self.finalize_request(rv)`来包装返回值为response对象，自此正常的请求的处理基本完成，至于请求出错，比如404，400等错误处理将单独作为一节解析。
+首先是从WSGI server传递过来的environ，使用RequestContext创建了一个请求上下文对象，在请求上下文对象中使用Request类来创建了一个请求对象。然后Flask开始处理请求，将其分发到响应的路由上。在路由所对应的视图函数上处理时，请求上下文入栈，这个栈是线程独立的，所以对于每个线程处理每个请求时，栈都是独立的。然后在视图函数上就可以使用到请求相关的信息，比如`from flask import request`
