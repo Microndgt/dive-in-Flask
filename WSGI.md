@@ -14,6 +14,20 @@ Contents
   - [start_response()可调用对象](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#start_response可调用对象)
   - [处理`Content-Length`头](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#处理content-length头)
   - [缓存和流](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#缓存和流)
+  - [处理块边界的中间件](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#处理块边界的中间件)
+  - [write()对象](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#write对象)
+  - [Unicode问题](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#unicode问题)
+  - [错误处理](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#错误处理)
+  - [HTTP 1.1 Expect/Continue](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#http-11-expectcontinue)
+  - [线程支持](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#线程支持)
+- [实现和应用小记](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#实现和应用小记)
+  - [服务器扩展APIs](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#服务器扩展apis)
+  - [应用配置](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#应用配置)
+  - [重建URL](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md#重建url)
+
+Created by [Toggle](https://github.com/Microndgt/toggle)
+
+WSGI Translation V0.1. Released at 2017/07/03.
 
 翻译自[https://www.python.org/dev/peps/pep-3333/](https://www.python.org/dev/peps/pep-3333/)
 
@@ -407,3 +421,174 @@ def start_response(status, response_headers, exc_info=None):
 
 缓存和流
 ---
+
+一般来讲，应用会通过缓存它们的输出（适当的大小），然后将其全部输出会达到其最佳性能。这在现有的框架比如Zope是一种常见的实现。输出以StringIO或者类似的对象缓存起来，然后全部一起传输，和响应头一起。
+
+对应在WSGI中的实现方法是简单的返回一个单元的迭代对象，比如一个列表，包含了响应体。这对于大量的渲染HTML页面的应用函数是一种推荐的方法，因为其文本适合在内存中。
+
+对于大的文件，或者特别使用的HTTP流比如服务器推送，一个应用可能需要以更小的块来提供输出，以避免将大的文件全部载入到内存。也有可能是在一些响应可能非常耗时，但是如果可以提前发送已经处理的部分将非常有用。
+
+在这种情况下，应用将通常返回一个迭代器，经常是一个生成器，来产生一块一块的输出。这些块可能被拆分的和多边界（服务器推送）一样，或者只是在耗时任务之前（比如在磁盘读取其他的block）
+
+WSGI服务器和中间件不可以延迟任何块的传输，它们要么将所有块传输给客户端，要么保证它们即使在应用在产生下一个块也会持续传输。一个服务器或者中间件可能会提供下列三种之一的保证：
+
+1. 在向应用返回控制权之前传输所有的块给操作系统（请求任何操作系统的缓存被清理）
+2. 当应用在产生下一个块的时候使用另外一个线程确保块在持续传输。
+3. （中间件）向上级服务器传递整个块
+
+通过提供这些保证，WSGI允许应用确保传输在输出数据时候不会停止。这在服务器推送技术流中是至关重要的，在多个边界之间的数据会完全传输给客户端。（服务器推送技术中一个HTTP报文中可能包含多个数据项）
+
+处理块边界的中间件
+---
+
+为了更好的支持异步应用和服务器，中间件不能在等待从应用的迭代对象产生的多值中将迭代分块。如果中间件在产生任何输出之前需要从应用积累更多的数据，那么它必须产生一个空的bytestring.
+
+从其他角度考虑这个问题，一个中间件在底下的应用产生一个值的时候必须每次也产生至少一个值。如果中间件没法产生一个值，它必须产生一个空的bytestring.
+
+这一需求确保了异步应用和服务器共同减少了需要共同运行给定数目的应用实例的线程的数量。
+
+这一需求意味着只要底下的应用返回了一个迭代对象，那么中间件就必须返回一个可迭代的对象。并且拒绝中间件去使用write对象来传输由应用传递来的数据。中间件只能使用它们父服务器的write对象来传递应用使用中间件提供的write传递的数据。
+
+write()对象
+---
+
+一些现存的框架以不同于WSGI的方式支持非缓存的输出。特别的，它们提供了write函数或者方法来写入一块非缓存的数据，或者是提供一个缓存的write函数和一个flush机制来清空缓存。
+
+但是这样的API不能应用在WSGI的可调用对象返回值上面，除非使用线程或者其他特别的机制。
+
+因此，允许这些框架继续使用这些API，WSGI包含了一个特别的write调用对象，由`start_response`对象返回。
+
+现在如果可能，现在WSGI应用和框架不应该使用write对象。write是为了支持现有不可避免的流API。一般来说，应用应该通过返回可迭代对象产生输出，这使得web服务器可以在同一个Python线程中交错其他任务，潜在的提高了服务器整体的性能。
+
+write对象是`start_response`返回的，它接受一个参数：要作为HTTP的响应体输出的bytestring，它必须保证传入的bytestring要么完整的传给客户端，要么在应用正在执行的时候缓存数据。
+
+即使使用write来产生所有或者部分的响应数据，应用也必须返回一个可迭代对象。返回的可迭代对象可能是空的，但是如果它产生了一个非空bytestring，输出必须被服务器正常处理，也就是说必须发送或者进入发送队列。应用不能在它们返回的可迭代对象上使用write，因此任何从可调用对象上产生的bytestring都将在所有的bytestring传递给write之后，传输给客户端。
+
+Unicode问题
+---
+
+HTTP没有直接的支持Unicode，同样它们的接口也没有支持。所有的编码/解码都必须由应用来处理，所有从服务器来的或者去的字符串都必须是str类型，或者bytes类型，绝对不是Unicode。使用一个unicode对象的结果是不可预知的。
+
+所有作为状态或者响应头传递给`start_response`的字符串都必须遵从RFC2616来编码。也就是它们必须是iso-8859-1字符或者使用RFC 2047的MIME编码。
+
+在Python平台上，使用的str或者StringType实际上都是一个基于Unicode的，所有本说明提到的strings都必须包含使用iso-8859-1编码的[代码点](http://www.cnblogs.com/runwulingsheng/p/5106078.html)表示。应用提供包含其他Unicode字符或者代码点的都是一个严重的错误。服务器不能支持包含其他Unicode字符的应用。
+
+再次提到，本说明所有提到的strings都必须是str或者StringType，而不能是unicode或者UnicodeType。即使一个平台允许str的一个字符超过8位存储，对于本说明提到的作为string的所有值也只会使用低8位。
+
+本文提到的所有bytestrings（从wsgi.input读取的，传递给write的或者应用产生的），值必须是Python3的bytes类型，在早期的Python中应该是str。
+
+错误处理
+---
+
+一般来讲，应用应该试图捕获这些异常，内部错误，并且给浏览器显示有用的信息。
+
+然而，为了显示这样的信息，应用必须不能已经传递给浏览器任何数据，否则会中止响应。WSGI因此提供了一个机制，要么允许应用发送错误数据，要么自动中止，传递`exec_info`给`start_response`。
+
+```
+try:
+    # regular application code here
+    status = "200 Froody"
+    response_headers = [("content-type", "text/plain")]
+    start_response(status, response_headers)
+    return ["normal body goes here"]
+except:
+    # XXX should trap runtime issues like MemoryError, KeyboardInterrupt
+    #     in a separate handler before this bare 'except:'...
+    status = "500 Oops"
+    response_headers = [("content-type", "text/plain")]
+    start_response(status, response_headers, sys.exc_info())
+    return ["error body goes here"]
+```
+
+如果当异常产生的时候没有输出被写入，那么`start_response`调用会正常返回，应用会返回一个错误体用来发送给浏览器。如果输出已经被发送给浏览器了，那么`start_response`将会重新引发提供的异常。异常不应该被应用捕获，这样应用将会中止，服务器然后可以捕捉这个异常并且中止响应。
+
+服务器应该捕获并且记录任何中止应用或者返回值迭代的异常。如果应用发生错误的时候一部分响应已经被发送给浏览器了，服务器可能试图给输出添加一个错误信息，如果已经发送的headers包含了一个服务器知道如何优雅的修改的`test/*`内容类型。
+
+一些中间件可能会提供一个额外的异常处理服务器，或者拦截和替换应用的错误信息。在这种情况下，中间件可能选择不去引发提供给`start_response`的`exc_info`，而是引发一个中间件的异常，或者在存储提供的参数后简单的返回。这将会导致应用返回它的错误体迭代对象，并且允许中间件去捕获和修改错误输出。只要应用作者如此做这项技术就可以工作
+
+1. 开始错误响应的时候总是提供`exc_info`
+2. `exc_info`提供的情况下不要捕获`start_response`引发的错误
+
+HTTP 1.1 Expect/Continue
+---
+
+应用HTTP1.1的服务器必须提供HTTP1.1的"expect/continue"的显式支持。这可以通过以下的方式来完成：
+
+1. 响应包含Expect的请求：立刻以"100 Continue"响应应答`100-continue`请求，并且正常处理
+2. 正常处理请求，但是给应用提供一个`wsgi.input`流，在应用第一次尝试读取这个输入流的时候会发送"100 Continue"响应。读取请求接下来保持阻塞直到客户端响应。
+3. 一直等待当客户端知晓服务器不支持expect/continue为止，然后向自己发送请求体。
+
+这些行为严格上不会应用在HTTP1.0的请求上，或者没有直接指向应用对象的请求。
+
+线程支持
+---
+
+线程支持，或者由于缺少，也是依赖服务器的。服务器可以并行运行多个请求，应该提供在单线程运行服务器的选项。这样应用或者框架不是线程安全的仍然可以使用这个服务器。
+
+实现和应用小记
+===
+
+服务器扩展APIs
+---
+
+一些服务器作者希望暴露更多的高级API，这样应用和框架作者就可以为了特别的目的来使用。比如，基于`mod_python`的网关可能希望暴露部分Apache API作为WSGI扩展。
+
+最简单的情况下，这只需要定义一个environ变量，比如`mod_python.some_api`。但是，大多数情况下，可能的中间件可能使得其变得很困难。比如，一个API可能返回了可以在environ找到的同样的HTTP头，所以这个API可能返回不同的数据，如果environ被中间件修改的话。
+
+一般来讲，任何复制，替换或者忽视一些WSGI功能的一些部分会导致和中间件不兼容的风险。服务器开发者不应该假定没有人使用中间件，因为一些框架开发者特别的希望使用不同的中间件来组织他们的框架。
+
+所以为了提供最大的兼容性，提供APIs的服务器要替换某些WSGI功能必须设计这些API，这样当被调用的时候使用他们替换的这些API。比如，一个可以读取HTTP请求头的扩展API必须需要应用传递到当前的environ，这样服务器可以验证通过API调用的HTTP头没有被中间件修改。如果扩展API不能保证其关于HTTP头的内容的environ保持一致，就必须停止给应用服务，比如引发错误，返回None而不是请求头的集合，或者对于API来将是合适的处理方法。
+
+同样的，如果扩展API提供了可选的写入响应数据或者头的方式，应该在应用可以接受扩展服务之前，需要`start_response`传递进来。如果传递进来的对象和之前服务器提供给应用的对象不一致的话，就不能保证正确的操作所以必须拒绝提供扩展服务给应用。
+
+这些原则也要应用在添加信息的中间件上，比如添加解析的cookie，表单变量，sessions和environ类似的对象。特别的，这样的中间件应该提供作为函数来操作environ的特性，而不是简单的将值填充到environ里。这帮助确保在任何中间件完成URL重写或者其他的environ修改之后，从environ获取的的信息已经被处理了。
+
+这些安全扩展原则被服务器和中间件开发者遵从是很重要的，为了避免中间件开发者强制删除在从environ来的任何或者所有扩展APIs里的特性，来确保应用使用这些扩展的时候这些介入没有被忽略。
+
+应用配置
+---
+
+这个说明没有定义服务器怎么选择应用去调用。这些或者其他的可选配置是高度服务器端的事情。服务器作者应该列出如何配置服务器去运行一个特定的应用对象，该选择何种选项等，比如线程选项。
+
+框架作者，应该列出如何创建应用对象来包装框架的功能。用户，已经选择服务器和框架的，必须连接两者。然而，由于现在框架和服务器有同样的接口，对每一个新的服务器/框架对的选择，现在只不过是一个机械的事情，而不是一个有意义的技术工作。
+
+最后，一些应用，框架和中间件可能希望使用environ字典来接收简单的字符串配置对象。服务器应该通过允许应用部署者在eenviron指定name-value对来支持这种方式。在最简单的情况下，这种支持可以包含操作系统提供的环境变量的副本，从`os.environ`到`environ`字典，因为部署者原则上可以在服务器外部配置这些，或者在CGI方面，可以通过在服务器配置文件来设置这些值。
+
+应用应该尽量保持最小的变量需要，因为并不是所有服务器都可以通过简单的配置来得到。当然，最坏情况，可以通过写一个脚本来得到这些配置：
+
+```
+from the_app import application
+
+def new_app(environ, start_response):
+    environ['the_app.configval1'] = 'something'
+    return application(environ, start_response)
+```
+
+但是，现在大多数存在的应用和框架可能只需要从environ来的简单的配置，来指示他们的应用或者特定的框架配置文件的位置（当然，应用应该缓存这样的配置，避免在每次调用时候重新读取)
+
+重建URL
+---
+
+如果应用希望重建请求的完整URL，可能使用下列算法重建：
+
+```
+from urllib.parse import quote
+url = environ['wsgi.url_scheme']+'://'
+if environ.get('HTTP_HOST'):
+    url += environ['HTTP_HOST']
+else:
+    url += environ['SERVER_NAME']
+    if environ['wsgi.url_scheme'] == 'https':
+        if environ['SERVER_PORT'] != '443':
+           url += ':' + environ['SERVER_PORT']
+    else:
+        if environ['SERVER_PORT'] != '80':
+           url += ':' + environ['SERVER_PORT']
+# 转换成URL编码
+url += quote(environ.get('SCRIPT_NAME', ''))
+url += quote(environ.get('PATH_INFO', ''))
+if environ.get('QUERY_STRING'):
+    url += '?' + environ['QUERY_STRING']
+```
+
+这样的重建URL可能与客户端请求的不完全是同样的URI。服务器重写了规则，比如，可能修改了客户端原始的请求URL，将其转换成了标准形式。
