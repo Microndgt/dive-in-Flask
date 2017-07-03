@@ -1,3 +1,22 @@
+Contents
+===
+
+- [Flask 启动流程](https://github.com/Microndgt/dive-in-Flask/flask-start.md#flask-启动流程)
+- [Server](https://github.com/Microndgt/dive-in-Flask/flask-start.md#server)
+  - [socketserver.BaseServer](https://github.com/Microndgt/dive-in-Flask/flask-start.md#socketserverbaseserver)
+  - [socketserver.TCPServer](https://github.com/Microndgt/dive-in-Flask/flask-start.md#socketservertcpserver)
+  - [http.server.HTTPServer](https://github.com/Microndgt/dive-in-Flask/flask-start.md#httpserverhttpserver)
+  - [BaseWSGIServer](https://github.com/Microndgt/dive-in-Flask/flask-start.md#basewsgiserver)
+- [RequestHandler](https://github.com/Microndgt/dive-in-Flask/flask-start.md#requesthandler)
+  - [BaseRequestHandler](https://github.com/Microndgt/dive-in-Flask/flask-start.md#baserequesthandler)
+  - [socketserver.StreamRequestHandler](https://github.com/Microndgt/dive-in-Flask/flask-start.md#socketserverstreamrequesthandler)
+  - [BaseHTTPRequestHandler](https://github.com/Microndgt/dive-in-Flask/flask-start.md#basehttprequesthandler)
+  - [WSGIRequestHandler](https://github.com/Microndgt/dive-in-Flask/flask-start.md#wsgirequesthandler)
+
+Contents Created by [Toggle](https://github.com/Microndgt/toggle)
+
+flask-start V0.1. Released at 2017/07/03.
+
 本篇文章将会解析从本地开发服务器的启动过程，首先由Flask app启动，然后到app如何接受到WSGI服务器的调用，再到WSGI服务器如何接受一个TCP数据，最后就是套接字编程的网络服务器一系列的过程，争取对框架的底层运行原理做一个深入的理解。
 
 Flask 启动流程
@@ -526,6 +545,21 @@ class BaseHTTPRequestHandler(socketserver.StreamRequestHandler):
                 return
             if not self.parse_request():
                 return
+            # 解析好请求后，根据请求的方法来调用相关的处理方法
+            mname = 'do_' + self.command
+            if not hasattr(self, mname):
+                self.send_error(
+                    HTTPStatus.NOT_IMPLEMENTED,
+                    "Unsupported method (%r)" % self.command)
+                return
+            method = getattr(self, mname)
+            method()
+            self.wfile.flush() #actually send the response if not already done.
+        except socket.timeout as e:
+            #a read or a write timed out.  Discard this connection
+            self.log_error("Request timed out: %r", e)
+            self.close_connection = True
+            return
 
     def parse_request(self):
         '''解析一个请求，请求应该被存储在self.raw_requestline, 结果在self.command, self.path, self.request_version和self.request_version
@@ -614,4 +648,168 @@ class BaseHTTPRequestHandler(socketserver.StreamRequestHandler):
         self.send_response_only(HTTPStatus.CONTINUE)
         self.end_headers()
         return True
+
+    # 最后会调用finish()方法
 ```
+
+这个处理器实现了handle方法，在处理完成一个请求之后，如果还保持连接，就会继续处理之后的请求。在处理每一个请求的时候，会首先读取请求行，获取请求方法和请求URI，并且会对发送过来的header做一个处理和监测，判断其是否可以继续处理。如果一切OK，就会分发到相应的处理方法上进行处理，比如`do_GET`等。在后面的`SimpleHTTPRequestHandler`实现了这些方法。但是基于WSGI的处理器与这种处理方法不同，它走到解析请求头之后，会开始WSGI方式去处理请求（调用app，传入environ和`start_resposne`，获取可迭代的返回值，然后使用write函数来输出给客户端)
+
+WSGIRequestHandler
+---
+
+```
+class WSGIRequestHandler(BaseHTTPRequestHandler, object):
+
+    def handle(self):
+        """Handles a request ignoring dropped connections."""
+        rv = None
+        try:
+            # 调用父类的handle方法，将会调用handle_one_request，这个方法子类重写了。
+            rv = BaseHTTPRequestHandler.handle(self)
+        except (socket.error, socket.timeout) as e:
+            self.connection_dropped(e)
+        except Exception:
+            if self.server.ssl_context is None or not is_ssl_error():
+                raise
+        if self.server.shutdown_signal:
+            self.initiate_shutdown()
+        return rv
+
+    def handle_one_request(self):
+        """Handle a single HTTP request."""
+        # 并没有对URI长度做限制
+        self.raw_requestline = self.rfile.readline()
+        if not self.raw_requestline:
+            self.close_connection = 1
+        # 解析请求成功，使用的是父类的方法
+        elif self.parse_request():
+            # 使用基于WSGI的方式处理请求
+            return self.run_wsgi()
+
+    def run_wsgi(self):
+        if self.headers.get('Expect', '').lower().strip() == '100-continue':
+            self.wfile.write(b'HTTP/1.1 100 Continue\r\n\r\n')
+
+        # 这里就是WSGI服务器创建environ的地方
+        self.environ = environ = self.make_environ()
+        headers_set = []
+        headers_sent = []
+
+        def write(data):
+            assert headers_set, 'write() before start_response'
+            if not headers_sent:
+                status, response_headers = headers_sent[:] = headers_set
+                try:
+                    code, msg = status.split(None, 1)
+                except ValueError:
+                    code, msg = status, ""
+                self.send_response(int(code), msg)
+                header_keys = set()
+                for key, value in response_headers:
+                    self.send_header(key, value)
+                    key = key.lower()
+                    header_keys.add(key)
+                if 'content-length' not in header_keys:
+                    self.close_connection = True
+                    self.send_header('Connection', 'close')
+                if 'server' not in header_keys:
+                    self.send_header('Server', self.version_string())
+                if 'date' not in header_keys:
+                    self.send_header('Date', self.date_time_string())
+                self.end_headers()
+
+            assert isinstance(data, bytes), 'applications must write bytes'
+            self.wfile.write(data)
+            self.wfile.flush()
+
+        def start_response(status, response_headers, exc_info=None):
+            if exc_info:
+                try:
+                    # 符合WSGI定义的，如果已经传递了，那么重新引发错误，使得应用中止
+                    if headers_sent:
+                        reraise(*exc_info)
+                finally:
+                    exc_info = None
+            elif headers_set:
+                raise AssertionError('Headers already set')
+            headers_set[:] = [status, response_headers]
+            return write
+
+        def execute(app):
+            application_iter = app(environ, start_response)
+            try:
+                for data in application_iter:
+                    write(data)
+                if not headers_sent:
+                    write(b'')
+            finally:
+                if hasattr(application_iter, 'close'):
+                    application_iter.close()
+                application_iter = None
+
+        try:
+            execute(self.server.app)
+        except (socket.error, socket.timeout) as e:
+            self.connection_dropped(e, environ)
+        except Exception:
+            if self.server.passthrough_errors:
+                raise
+            from werkzeug.debug.tbtools import get_current_traceback
+            traceback = get_current_traceback(ignore_system_exceptions=True)
+            try:
+                # if we haven't yet sent the headers but they are set
+                # we roll back to be able to set them again.
+                if not headers_sent:
+                    del headers_set[:]
+                execute(InternalServerError())
+            except Exception:
+                pass
+            self.server.log('error', 'Error on request:\n%s',
+                            traceback.plaintext)
+
+    def make_environ(self):
+        request_url = url_parse(self.path)
+
+        def shutdown_server():
+            self.server.shutdown_signal = True
+
+        url_scheme = self.server.ssl_context is None and 'http' or 'https'
+        path_info = url_unquote(request_url.path)
+
+        environ = {
+            'wsgi.version':         (1, 0),
+            'wsgi.url_scheme':      url_scheme,
+            'wsgi.input':           self.rfile,
+            'wsgi.errors':          sys.stderr,
+            'wsgi.multithread':     self.server.multithread,
+            'wsgi.multiprocess':    self.server.multiprocess,
+            'wsgi.run_once':        False,
+            'werkzeug.server.shutdown': shutdown_server,
+            'SERVER_SOFTWARE':      self.server_version,
+            'REQUEST_METHOD':       self.command,
+            'SCRIPT_NAME':          '',
+            'PATH_INFO':            wsgi_encoding_dance(path_info),
+            'QUERY_STRING':         wsgi_encoding_dance(request_url.query),
+            'CONTENT_TYPE':         self.headers.get('Content-Type', ''),
+            'CONTENT_LENGTH':       self.headers.get('Content-Length', ''),
+            'REMOTE_ADDR':          self.address_string(),
+            'REMOTE_PORT':          self.port_integer(),
+            'SERVER_NAME':          self.server.server_address[0],
+            'SERVER_PORT':          str(self.server.server_address[1]),
+            'SERVER_PROTOCOL':      self.request_version
+        }
+
+        for key, value in self.headers.items():
+            key = 'HTTP_' + key.upper().replace('-', '_')
+            if key not in ('HTTP_CONTENT_TYPE', 'HTTP_CONTENT_LENGTH'):
+                environ[key] = value
+
+        if request_url.scheme and request_url.netloc:
+            environ['HTTP_HOST'] = request_url.netloc
+
+        return environ
+```    
+
+到此，整个Flask应用的启动流程就已经梳理完了，当然这只是一个最简单的介绍，一个框架，对于把握全局有非常有用的帮助，所以细节方面都没有仔细去研究。下面是一个大致的流程图：
+
+![](http://7xq6lu.com1.z0.glb.clouddn.com/flask-start.jpeg)

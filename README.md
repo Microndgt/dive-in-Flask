@@ -10,8 +10,8 @@ dive in Flask, werkzeug and wsgi etc.
 ![](https://img.shields.io/badge/functools--green.svg)
 ![](https://img.shields.io/badge/io--green.svg)
 
-- [WSGI](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md) - under construction...
-- [Flask Start](https://github.com/Microndgt/dive-in-Flask/blob/master/flask-start.md) - under construction...
+- [WSGI](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md) - V0.1
+- [Flask Start](https://github.com/Microndgt/dive-in-Flask/blob/master/flask-start.md) - V0.1
 - Route & Blueprint
 - Context
 - [Request](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md) - done...
