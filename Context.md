@@ -1,3 +1,15 @@
+Contents
+===
+
+- [Local](https://github.com/Microndgt/dive-in-Flask/blob/master/Context.md#local)
+- [LocalProxy](https://github.com/Microndgt/dive-in-Flask/blob/master/Context.md#localproxy)
+- [LocalStack](https://github.com/Microndgt/dive-in-Flask/blob/master/Context.md#localstack)
+- [上下文栈](https://github.com/Microndgt/dive-in-Flask/blob/master/Context.md#上下文栈)
+  - [请求上下文](https://github.com/Microndgt/dive-in-Flask/blob/master/Context.md#请求上下文)
+  - [应用上下文](https://github.com/Microndgt/dive-in-Flask/blob/master/Context.md#应用上下文)
+
+Contents Created by [Toggle](https://github.com/Microndgt/toggle)
+
 flask中有应用上下文和请求上下文，关于请求上下文在上一节Request已经介绍过了。本节主要关注上下文栈是如何运作的，以及应用上下文的相关东西。
 
 > 每一段程序都有很多外部变量。只有像Add这种简单的函数才是没有外部变量的。一旦你的一段程序有了外部变量，这段程序就不完整，不能独立运行。你为了使他们运行，就要给所有的外部变量一个一个写一些值进去。这些值的集合就叫上下文。 – vzch
