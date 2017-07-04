@@ -13,8 +13,8 @@ dive in Flask, werkzeug and wsgi etc.
 - [WSGI](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md) - V0.1
 - [Flask Start](https://github.com/Microndgt/dive-in-Flask/blob/master/flask-start.md) - V0.1
 - [Request](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md) - V0.1
-- [Route & Blueprint](https://github.com/Microndgt/dive-in-Flask/blob/master/route.md)
-- Context
+- [Context](https://github.com/Microndgt/dive-in-Flask/blob/master/Context.md) - V0.1
+- [Route](https://github.com/Microndgt/dive-in-Flask/blob/master/Route.md) - under construction...
 - [Response](https://github.com/Microndgt/dive-in-Flask/blob/master/Response.md) - under construction...
 - Session
 - [Werkzeug](https://github.com/Microndgt/dive-in-Flask/blob/master/Werkzeug) - under construction...
