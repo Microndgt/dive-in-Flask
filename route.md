@@ -8,12 +8,10 @@ Contents
   - [Flask.route](https://github.com/Microndgt/dive-in-Flask/blob/master/route.md#flaskroute)
   - [Flask.add_url_rule](https://github.com/Microndgt/dive-in-Flask/blob/master/route.md#flaskadd_url_rule)
   - [Werkzeug.routing.Rule](https://github.com/Microndgt/dive-in-Flask/blob/master/route.md#werkzeugroutingrule)
-  - [Werkzeug.routing.Map](https://github.com/Microndgt/dive-in-Flask/blob/master/route.md#werkzeugroutingmap)
-  - [flask.wrappers.RequestContex.match_request](https://github.com/Microndgt/dive-in-Flask/blob/master/route.md#flaskwrappersrequestcontexmatch_request)
   - [Flask.create_url_adapter](https://github.com/Microndgt/dive-in-Flask/blob/master/route.md#flaskcreate_url_adapter)
-- [蓝图](https://github.com/Microndgt/dive-in-Flask/blob/master/route.md#蓝图)
-  - [flask.blueprints.Blueprint](https://github.com/Microndgt/dive-in-Flask/blob/master/route.md#flaskblueprintsblueprint)
-  - [`flask.helpers._PackageBoundObject`](https://github.com/Microndgt/dive-in-Flask/blob/master/route.md#flaskhelpers_packageboundobject)
+  - [Werkzeug.routing.Map](https://github.com/Microndgt/dive-in-Flask/blob/master/route.md#werkzeugroutingmap)
+  - [flask.ctx.RequestContex.match_request](https://github.com/Microndgt/dive-in-Flask/blob/master/route.md#flaskctxrequestcontexmatch_request)
+- [总结](https://github.com/Microndgt/dive-in-Flask/blob/master/route.md#总结)
 
 Contents Created by [Toggle](https://github.com/Microndgt/toggle)
 
@@ -486,20 +484,76 @@ def match(self, path):
 
 在匹配的时候，只有有转换器的才会有相应的匹配分组结果，然后返回匹配的result
 
-Werkzeug.routing.Map
----
-
-flask.wrappers.RequestContex.match_request
----
-
 Flask.create_url_adapter
 ---
 
-蓝图
+```
+def create_url_adapter(self, request):
+    '''为每个请求创建URL适配器，在请求上下文还没有建立的时候就创建了，所以request是显式传递的。
+    '''
+    if request is not None:
+        return self.url_map.bind_to_environ(request.environ,
+                server_name=self.config['SERVER_NAME'])
+    if self.config['SERVER_NAME'] is not None:
+        return self.url_map.bind(
+                self.config['SERVER_NAME'],
+                script_name=self.config['APPLICATION_ROOT'] or '/',
+                url_scheme=self.config['PREFERRED_URL_SCHEME'])
+```
+
+可以看到，其主要是调用了Map类的`bind_to_environ`和`bind方法`
+
+Werkzeug.routing.Map
+---
+
+[官方文档](http://werkzeug.pocoo.org/docs/0.11/routing/)
+
+Map中除了实现`bind_to_environ`和`bind方法`绑定到特定环境，还有`add`方法可以添加路由，添加好路由规则之后，使用MapAdapter对象的url.match就可以匹配路由了。正常情况下返回对应的 endpoint 名字和参数字典，可能报重定向或者 404 异常。
+
+下面是Map的一些用法：
+
+```
+from werkzeug.routing import Map, Rule, NotFound, RequestRedirect
+
+url_map = Map([
+    Rule('/', endpoint='blog/index'),
+    Rule('/<int:year>/', endpoint='blog/archive'),
+    Rule('/<int:year>/<int:month>/', endpoint='blog/archive'),
+    Rule('/<int:year>/<int:month>/<int:day>/', endpoint='blog/archive'),
+    Rule('/<int:year>/<int:month>/<int:day>/<slug>',
+         endpoint='blog/show_post'),
+    Rule('/about', endpoint='blog/about_me'),
+    Rule('/feeds/', endpoint='blog/feeds'),
+    Rule('/feeds/<feed_name>.rss', endpoint='blog/show_feed')
+])
+urls = m.bind("example.com", "/")  # MapAdapter
+urls.match("/", "GET")
+# ('index', {})
+urls.match("/downloads/42")
+# ('downloads/show', {'id': 42})
+```
+
+flask.ctx.RequestContex.match_request
+---
+
+```
+def match_request(self):
+    """Can be overridden by a subclass to hook into the matching
+    of the request.
+    """
+    try:
+        # url_adapter是一个MapAdapter对象
+        # match方法返回rule和参数
+        url_rule, self.request.view_args = \
+            self.url_adapter.match(return_rule=True)
+        self.request.url_rule = url_rule
+    except HTTPException as e:
+        self.request.routing_exception = e
+```
+
+总结
 ===
 
-flask.blueprints.Blueprint
----
+路由系统解析大致流程总结一下：首先在处理wsgi调用的时候，创建了请求上下文对象，在创建这个的过程中，根据environ创建了url_adapter(MapAdapter对象)，绑定了相应环境。然后使用这个url_adapter来匹配，返回匹配的endpoint，和动态参数。而Flask中存储了endpoint到视图函数的字典`self.view_functions`，这样就可以处理请求时候调用相应的视图函数，进行处理了。
 
-`flask.helpers._PackageBoundObject`
----
+应用的视图函数和url rule的绑定过程主要是使用`add_url_rule`方法，来创建一个Rule对象，然后将其加入`self.map`，add方法，这样以后就可以进行匹配了。
