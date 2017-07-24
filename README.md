@@ -10,12 +10,12 @@ dive in Flask, werkzeug and wsgi etc.
 ![](https://img.shields.io/badge/functools--green.svg)
 ![](https://img.shields.io/badge/io--green.svg)
 
-- [WSGI](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md) - V0.1
-- [Flask Start](https://github.com/Microndgt/dive-in-Flask/blob/master/flask-start.md) - V0.1
-- [Request](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md) - V0.1
-- [Context](https://github.com/Microndgt/dive-in-Flask/blob/master/Context.md) - V0.1
-- [Route](https://github.com/Microndgt/dive-in-Flask/blob/master/route.md) - V0.1
-- [Blueprint](https://github.com/Microndgt/dive-in-Flask/blob/master/Blueprint.md) - under construction...
+- [WSGI](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md)
+- [Flask Start](https://github.com/Microndgt/dive-in-Flask/blob/master/flask-start.md)
+- [Request](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md)
+- [Context](https://github.com/Microndgt/dive-in-Flask/blob/master/Context.md)
+- [Route](https://github.com/Microndgt/dive-in-Flask/blob/master/route.md)
+- [Blueprint](https://github.com/Microndgt/dive-in-Flask/blob/master/Blueprint.md)
 - [Response](https://github.com/Microndgt/dive-in-Flask/blob/master/Response.md) - under construction...
 - Session
 - [Werkzeug](https://github.com/Microndgt/dive-in-Flask/blob/master/Werkzeug) - under construction...
