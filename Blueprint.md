@@ -1,3 +1,12 @@
+Contents
+===
+
+- [使用蓝图](https://github.com/Microndgt/dive-in-Flask/blob/master/Blueprint.md#%E4%BD%BF%E7%94%A8%E8%93%9D%E5%9B%BE)
+- [`flask.blueprints.Blueprint`](https://github.com/Microndgt/dive-in-Flask/blob/master/Blueprint.md#flaskblueprintsblueprint)
+- [`register_blueprint`](https://github.com/Microndgt/dive-in-Flask/blob/master/Blueprint.md#register_blueprint)
+
+Contents Created by [Toggle](https://github.com/Microndgt/toggle)
+
 使用蓝图
 ===
 

@@ -10,26 +10,31 @@ dive in Flask, werkzeug and wsgi etc.
 ![](https://img.shields.io/badge/functools--green.svg)
 ![](https://img.shields.io/badge/io--green.svg)
 
+深入理解Flask
+===
+
 - [WSGI](https://github.com/Microndgt/dive-in-Flask/blob/master/WSGI.md)
 - [Flask Start](https://github.com/Microndgt/dive-in-Flask/blob/master/flask-start.md)
 - [Request](https://github.com/Microndgt/dive-in-Flask/blob/master/Request.md)
 - [Context](https://github.com/Microndgt/dive-in-Flask/blob/master/Context.md)
 - [Route](https://github.com/Microndgt/dive-in-Flask/blob/master/route.md)
 - [Blueprint](https://github.com/Microndgt/dive-in-Flask/blob/master/Blueprint.md)
-- [Response](https://github.com/Microndgt/dive-in-Flask/blob/master/Response.md) - under construction...
+- [Response](https://github.com/Microndgt/dive-in-Flask/blob/master/Response.md)
 - Session
-- [Werkzeug](https://github.com/Microndgt/dive-in-Flask/blob/master/Werkzeug) - under construction...
-  - [DataStructure](https://github.com/Microndgt/dive-in-Flask/blob/master/Werkzeug/DataStructure.md) - under construction...
-  - [FormDataParser](https://github.com/Microndgt/dive-in-Flask/blob/master/Werkzeug/FormDataParser.md) - under construction...
-  - [wsgi](https://github.com/Microndgt/dive-in-Flask/blob/master/Werkzeug/wsgi.md) - under construction...
-  - [http](https://github.com/Microndgt/dive-in-Flask/blob/master/Werkzeug/http.md) - under construction...
-  - [utils](https://github.com/Microndgt/dive-in-Flask/blob/master/Werkzeug/utils.md) - under construction...
-  - [urls](https://github.com/Microndgt/dive-in-Flask/blob/master/Werkzeug/urls.md) - under construction...
+
+周边
+===
+
+- Werkzeug
 - Gunicorn
 - Gevent
-- [functools](https://github.com/Microndgt/dive-in-Flask/blob/master/functools.md) - under construction...
-- [I/O Programming](https://github.com/Microndgt/dive-in-Flask/blob/master/IO_programming.md) - under construction...
 - Requests
+
+辅助
+===
+
+- [functools](https://github.com/Microndgt/dive-in-Flask/blob/master/functools.md)
+- [I/O Programming](https://github.com/Microndgt/dive-in-Flask/blob/master/IO_programming.md)
 
 持续更新中。。。
 
