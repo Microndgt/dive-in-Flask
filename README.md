@@ -21,6 +21,7 @@ dive in Flask, werkzeug and wsgi etc.
 - [Blueprint](https://github.com/Microndgt/dive-in-Flask/blob/master/Blueprint.md)
 - [Response](https://github.com/Microndgt/dive-in-Flask/blob/master/Response.md)
 - [Session](https://github.com/Microndgt/dive-in-Flask/blob/master/Session.md)
+- [Exception](https://github.com/Microndgt/dive-in-Flask/blob/master/exceptions.md)
 
 周边
 ===

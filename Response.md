@@ -389,3 +389,73 @@ def get_wsgi_headers(self, environ):
 到此完成了Flask中响应部分的解析，响应的过程大体如下：首先视图函数完成请求处理后，会返回一些东西，可能返回的是字符串，Response对象，tuple（包含了响应，status，headers）等，返回的这些东西都会通过`self.make_response`方法处理，处理后就成了标准的Response对象了，之后会处理被`after_request`装饰器装饰的函数，这些函数可能会修改返回的Response对象，当然不论如何，修改后都还是Response对象。这个Response对象还是可调用的，这样就可以这样调用`response(environ, start_response)`，来生成响应，这过程会生成headers, status和可迭代的应用数据，前两者会被`start_response`调用，准备发送headers和status数据，后者会在之后发送。
 
 自此就完成了Flask中的处理。
+
+后记
+===
+
+`make_response(*args)`
+---
+
+在看httpbin源码的时候看到用这个函数自定义了一个response对象，然后再返回，觉得很有用。于是看源码！
+
+首先函数文档里是这么说的：
+
+有时候在视图函数里添加额外的headers是很有必要的。因为视图函数没必要返回一个response对象，但是它可以返回一个值让Flask帮它转换成一个response对象。这样如果要添加headers就会变得棘手。调用这个函数你将得到一个response对象，这样你就可以往上面加headers了。
+
+像这样的视图函数
+
+```
+def index():
+    return render_template('index.html', foo=42)
+```
+
+你想在上面加一个新的header，可以这样做：
+
+```
+def index():
+    response = make_response(render_template('index.html', foo=42))
+    response.headers['X-Parachutes'] = 'parachutes are cool'
+    return response
+```
+
+这个函数几乎接收你可以return的任何参数，这是一个产生404error的例子。`response = make_response(render_template('not_found.html'), 404)`
+
+这个函数的其他用法是强制将一个视图函数的返回值变成一个response对象，使用视图的装饰器会很有用。
+
+```
+response = make_response(view_function())
+response.headers['X-Parachutes'] = 'parachutes are cool'
+```
+
+本质上，这个函数做了以下事情：
+
+- 如果什么参数也不传，那么它会创建一个新的response参数
+- 如果值传递一个参数，将会调用`flask.Flask.make_response`
+- 如果多于一个参数被传递进来，参数将会被当成元组传递给`flask.Flask.make_response`
+
+下来看下源码，源码很简单，也就是上面的本质上说的事情。
+
+```
+if not args:
+    # Response对象
+    return current_app.response_class()
+if len(args) == 1:
+    # 从元组中取出来，然后当成一个参数传递给make_response
+    args = args[0]
+return current_app.make_response(args)
+```
+
+其中，`make_response`就是上面讲到的那个方法。
+
+下面看一个简单的用法，取自httpbin：
+
+```
+@app.route('/robots.txt')
+def view_robots_page():
+    """Simple Html Page"""
+
+    response = make_response()
+    response.data = ROBOT_TXT
+    response.content_type = "text/plain"
+    return response
+```
